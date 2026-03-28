@@ -29,7 +29,7 @@ RUN uv pip install \
 # ── Install project dependencies ─────────────────────────────────────────────
 # Copy pyproject.toml and uv.lock before source files so this layer is only
 # invalidated when dependencies change, not on every code edit.
-COPY pyproject.toml uv.lock .
+COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
 
 # ── Application source ────────────────────────────────────────────────────────
