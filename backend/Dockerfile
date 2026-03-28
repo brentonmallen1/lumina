@@ -14,8 +14,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 # Install Python 3.13 via uv and create project virtualenv
 WORKDIR /app
-RUN uv python install 3.13
-RUN uv venv --python 3.13 /app/.venv
+RUN uv python install 3.12
+RUN uv venv --python 3.12 /app/.venv
 
 # Activate venv for all subsequent RUN, CMD, and ENTRYPOINT steps
 ENV PATH="/app/.venv/bin:$PATH"
