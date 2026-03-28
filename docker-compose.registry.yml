@@ -1,0 +1,31 @@
+# Pull from Docker registry instead of building locally.
+# For Unraid or any host that just wants to run the pre-built image.
+#
+# Usage:
+#   docker compose -f docker-compose.registry.yml up -d
+#
+# With GPU:
+#   docker compose -f docker-compose.registry.yml -f docker-compose.gpu.yml up -d
+#
+# With Canary/NeMo (use the :canary tag):
+#   Set DOCKER_TAG=canary in .env, then:
+#   docker compose -f docker-compose.registry.yml -f docker-compose.gpu.yml up -d
+
+services:
+  whisper-gui:
+    image: ${DOCKER_REGISTRY}:${DOCKER_TAG:-latest}
+    ports:
+      - "${APP_PORT:-8080}:8000"
+    environment:
+      TRANSCRIPTION_ENGINE: ${TRANSCRIPTION_ENGINE:-faster-whisper}
+      WHISPER_MODEL_SIZE:   ${WHISPER_MODEL_SIZE:-large-v3}
+      CANARY_MODEL:         ${CANARY_MODEL:-nvidia/canary-qwen-2.5b}
+      QWEN_MODEL:           ${QWEN_MODEL:-Qwen/Qwen2.5-Audio-3B-Instruct}
+      COMPUTE_TYPE:         ${COMPUTE_TYPE:-int8}
+      LANGUAGE:             ${LANGUAGE:-en}
+      HF_HOME:              /models/hf
+      WHISPER_DOWNLOAD_ROOT: /models/whisper
+    volumes:
+      - ${MODELS_VOLUME:-./volumes/models}:/models
+      - ${AUDIO_CACHE_VOLUME:-./volumes/audio_cache}:/cache/audio
+    restart: unless-stopped

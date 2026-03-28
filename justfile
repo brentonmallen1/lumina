@@ -141,3 +141,84 @@ clean-models:
 clean-all: clean-audio
     rm -rf volumes/models/*
     @echo "All volume data cleared."
+
+# ── Release ─────────────────────────────────────────────────────────────
+
+# Generate CalVer version (YYYY.MM.DD or YYYY.MM.DD.N if tag exists)
+_calver:
+    #!/usr/bin/env bash
+    base=$(date +%Y.%m.%d)
+    # Check if base tag exists; if so, find next increment
+    if git rev-parse "v${base}" >/dev/null 2>&1; then
+        n=1
+        while git rev-parse "v${base}.${n}" >/dev/null 2>&1; do
+            ((n++))
+        done
+        echo "${base}.${n}"
+    else
+        echo "${base}"
+    fi
+
+# Build and push a release to DOCKER_REGISTRY (reads from .env)
+release:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    registry="${DOCKER_REGISTRY:-}"
+    if [[ -z "$registry" ]]; then
+        echo "Error: DOCKER_REGISTRY not set in .env"
+        exit 1
+    fi
+
+    version=$(just _calver)
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Releasing whisper-gui v${version}"
+    echo "  Registry: ${registry}"
+    echo "═══════════════════════════════════════════════════════════════"
+
+    # Build for linux/amd64 and push
+    docker buildx build \
+        --platform linux/amd64 \
+        --tag "${registry}:${version}" \
+        --tag "${registry}:latest" \
+        --push \
+        ./backend
+
+    # Tag the commit
+    git tag -a "v${version}" -m "Release v${version}"
+    git push origin "v${version}"
+
+    echo ""
+    echo "✓ Pushed ${registry}:${version}"
+    echo "✓ Pushed ${registry}:latest"
+    echo "✓ Tagged v${version}"
+
+# Build and push a release with canary/NeMo support
+release-canary:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    registry="${DOCKER_REGISTRY:-}"
+    if [[ -z "$registry" ]]; then
+        echo "Error: DOCKER_REGISTRY not set in .env"
+        exit 1
+    fi
+
+    version=$(just _calver)
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Releasing whisper-gui v${version}-canary"
+    echo "  Registry: ${registry}"
+    echo "═══════════════════════════════════════════════════════════════"
+
+    # Build for linux/amd64 with canary support and push
+    docker buildx build \
+        --platform linux/amd64 \
+        --build-arg INSTALL_CANARY=true \
+        --tag "${registry}:${version}-canary" \
+        --tag "${registry}:canary" \
+        --push \
+        ./backend
+
+    echo ""
+    echo "✓ Pushed ${registry}:${version}-canary"
+    echo "✓ Pushed ${registry}:canary"

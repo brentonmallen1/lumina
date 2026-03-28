@@ -2,12 +2,17 @@ FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+# Static ffmpeg binary — avoids pulling in GTK, GL, and dozens of codec libs
+ADD --chmod=755 https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz /tmp/ffmpeg.tar.xz
+RUN tar -xf /tmp/ffmpeg.tar.xz -C /tmp && \
+    mv /tmp/ffmpeg-*-static/ffmpeg /tmp/ffmpeg-*-static/ffprobe /usr/local/bin/ && \
+    rm -rf /tmp/ffmpeg*
 
 # Install uv from official distroless image
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
