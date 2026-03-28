@@ -1,0 +1,24 @@
+# Local dev environment — don't copy into container
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Cache directories
+cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
