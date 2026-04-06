@@ -157,11 +157,11 @@ restart: down up
 
 # Tail live container logs
 logs:
-    docker compose logs -f whisper-gui
+    docker compose logs -f lumina
 
 # Open a bash shell inside the running container
 shell:
-    docker compose exec whisper-gui bash
+    docker compose exec lumina bash
 
 # Show running container status
 status:
@@ -220,7 +220,7 @@ release:
 
     version=$(just _calver)
     echo "═══════════════════════════════════════════════════════════════"
-    echo "  Releasing whisper-gui v${version}"
+    echo "  Releasing lumina v${version}"
     echo "  Registry: ${registry}"
     echo "═══════════════════════════════════════════════════════════════"
 
@@ -255,7 +255,7 @@ release-canary:
 
     version=$(just _calver)
     echo "═══════════════════════════════════════════════════════════════"
-    echo "  Releasing whisper-gui v${version}-canary"
+    echo "  Releasing lumina v${version}-canary"
     echo "  Registry: ${registry}"
     echo "═══════════════════════════════════════════════════════════════"
 
