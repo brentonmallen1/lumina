@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import './ToolCard.css';
 
@@ -20,32 +20,14 @@ export default function ToolCard({
   comingSoon = false,
   featured = false,
 }: ToolCardProps) {
-  const navigate = useNavigate();
+  const classes = [
+    'tool-card',
+    featured   ? 'tool-card--featured'    : '',
+    comingSoon ? 'tool-card--coming-soon' : 'tool-card--active',
+  ].filter(Boolean).join(' ');
 
-  const handleClick = () => {
-    if (!comingSoon && href) navigate(href);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.key === 'Enter' || e.key === ' ') && !comingSoon && href) {
-      e.preventDefault();
-      navigate(href);
-    }
-  };
-
-  return (
-    <div
-      className={[
-        'tool-card',
-        featured   ? 'tool-card--featured'     : '',
-        comingSoon ? 'tool-card--coming-soon'  : 'tool-card--active',
-      ].join(' ').trim()}
-      role={!comingSoon && href ? 'button' : undefined}
-      tabIndex={!comingSoon && href ? 0 : undefined}
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
-      aria-label={comingSoon ? `${title} — coming soon` : title}
-    >
+  const inner = (
+    <>
       <div className="tool-card-top">
         <div className="tool-card-icon-wrap">
           <Icon size={featured ? 22 : 20} aria-hidden="true" />
@@ -68,6 +50,23 @@ export default function ToolCard({
           </span>
         </div>
       )}
+    </>
+  );
+
+  if (!comingSoon && href) {
+    return (
+      <Link to={href} className={classes}>
+        {inner}
+      </Link>
+    );
+  }
+
+  return (
+    <div
+      className={classes}
+      aria-label={comingSoon ? `${title} — coming soon` : undefined}
+    >
+      {inner}
     </div>
   );
 }

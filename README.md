@@ -1,72 +1,83 @@
-# Whisper GUI
+# Lumina
 
-A self-contained, self-hostable speech-to-text web application. Drop in an audio file, get a transcription back. Everything runs locally — no cloud APIs, no data leaving your machine.
-
-Built around a pluggable engine architecture so you can trade off speed, accuracy, and hardware requirements by changing a single environment variable.
+A self-hostable AI content extraction and analysis tool. Point it at audio, video, a YouTube URL, a web page, a PDF, or plain text — Lumina transcribes, summarizes, and lets you chat with the content. Everything runs locally; no data leaves your machine.
 
 <p align="center">
-  <img src="screenshot.png" alt="Whisper GUI screenshot" width="700">
+  <img src="screenshot.png" alt="Lumina screenshot" width="700">
 </p>
+
+---
+
+## What it does
+
+| Tool | What you give it | What you get |
+|---|---|---|
+| **Summarize** | Audio, video, YouTube URL, webpage, PDF, image, or text | AI-generated summary, key points, mind map, action items, Q&A, meeting minutes |
+| **Transcribe** | Audio or video file | Full transcript with word-level timestamps, SRT/VTT export |
+| **Audio Enhance** | Any audio file | Noise reduction, vocal isolation, super-resolution, normalization |
+| **Batch** | Multiple files | All processed and summarized in one queue |
+| **RSS Monitor** | RSS or podcast feed URL | Auto-transcribes new episodes as they arrive |
+| **History** | — | Browse and search past results |
+| **Prompts** | — | Customize AI prompts per summarization mode |
 
 ---
 
 ## Features
 
-- **Drag-and-drop or file picker** upload (MP3, WAV, M4A, FLAC, OGG, WEBM, OPUS, AAC, WMA)
-- **In-browser transcription display** with word count
-- **In-browser audio playback** — listen back to your recording alongside the transcript
-- **Edit mode** — click Edit to modify the transcript directly in the browser before exporting
-- **Copy to clipboard** and **download as `.txt`**
-- **Engine info badge** — header shows the active engine, model, and GPU at a glance
-- **File browser** — "Files" tab lists all previously uploaded audio with name, size, and upload date
-- **Re-transcribe from cache** — re-run transcription on any cached file without re-uploading
-- **Pluggable engines** — switch between Whisper, Faster-Whisper, Canary-Qwen, or Qwen2-Audio
-- **CPU and GPU** support; GPU engines gracefully refuse to load on CPU-only hosts
-- **Model weights cached to a volume** — downloaded once, reused across container restarts
-- **Models pre-downloaded at startup** so the first request is instant
-- **Live loading page** — startup progress is shown in the browser and the app auto-reloads when ready
-- **Audio cache TTL** — uploaded files are automatically purged after a configurable number of hours
-- Zero external dependencies at runtime — fully self-hostable
+- **Universal input** — audio, video, YouTube, webpage, PDF, image, or raw text in one interface
+- **Multiple summarization modes** — summary, key points, mind map, action items, Q&A, meeting minutes; fully prompt-customizable
+- **Streaming responses** — LLM output streams token by token via SSE; no waiting for the full response
+- **Source caching** — extracted content is cached in-session; switching modes re-runs only the LLM, not the extraction
+- **In-context chat** — after any summarization, chat with the source document using the full extracted text
+- **Translation** — translate any result to another language, streamed
+- **Word-level timestamps** — transcripts include per-word timing for SRT/VTT subtitle export
+- **Speaker diarization** — optional pyannote.audio integration (requires HuggingFace token)
+- **Audio enhancement pipeline** — DeepFilterNet noise reduction, Demucs vocal isolation, LavaSR super-resolution
+- **Batch processing** — queue multiple files and summarize them all in one run
+- **RSS/podcast monitoring** — subscribe to feeds; new episodes are fetched and transcribed automatically
+- **Prompt management** — edit or replace any built-in prompt template; custom prompts override defaults per mode
+- **Search history** — full-text search over all past summarization results via SQLite FTS5
+- **Pluggable engines** — swap transcription backends without changing anything else
+- **HTTP API** — every tool accessible programmatically with API key auth and full OpenAPI docs at `/docs`
+- **Fully self-contained** — no cloud APIs, no telemetry, no external calls (except to your own Ollama instance)
 
 ---
 
-## Engines
+## Transcription engines
 
 | Engine | Hardware | Notes |
 |---|---|---|
-| `faster-whisper` | CPU or GPU | Default. ~4× faster than openai-whisper via CTranslate2. Recommended for most setups. |
-| `whisper` | CPU or GPU | Original OpenAI Whisper. Slower but widely tested. |
-| `canary` | **GPU required** | NVIDIA NeMo Canary. Two models available — see below. Requires `INSTALL_NEMO=true` at build time. |
-| `qwen-audio` | **GPU required** | Qwen2-Audio / Qwen2.5-Audio from HuggingFace. Highest quality, highest VRAM requirement. |
+| `faster-whisper` | CPU or GPU | **Default.** ~4× faster than openai-whisper via CTranslate2. Recommended for most setups. |
+| `whisper` | CPU or GPU | Original OpenAI Whisper. Slower but widely compatible. |
+| `canary` | **GPU required** | NVIDIA NeMo Canary. Top of the OpenASR leaderboard. English only with punctuation. |
+| `qwen-audio` | **GPU required** | Qwen2.5-Audio from HuggingFace. Highest quality; highest VRAM requirement. |
+
+### Whisper model sizes
+
+Applies to `whisper` and `faster-whisper`.
+
+| Size | VRAM | Notes |
+|---|---|---|
+| `tiny` | ~1 GB | Fastest, lowest accuracy |
+| `base` | ~1 GB | |
+| `small` | ~2 GB | Good CPU choice |
+| `medium` | ~5 GB | |
+| `large-v3` | ~10 GB | Highest accuracy |
+| `large-v3-turbo` | ~6 GB | **Recommended for GPU.** Large-v3 encoder, pruned decoder — ~8× faster with minimal quality loss. |
 
 ### Canary models
 
 | Model | VRAM | Notes |
 |---|---|---|
-| `nvidia/canary-qwen-2.5b` | ~6 GB | **Recommended.** FastConformer + Qwen3-1.7B backbone. #1 on the HuggingFace OpenASR leaderboard. English only, with punctuation and capitalization. Requires NeMo from git trunk. |
-| `nvidia/canary-1b` | ~4 GB | Classic EncDecMultiTaskModel. Supports English, Spanish, French, German. Requires stable `nemo_toolkit` PyPI release. |
+| `nvidia/canary-qwen-2.5b` | ~6 GB | FastConformer + Qwen3-1.7B backbone. #1 OpenASR leaderboard. English only. |
+| `nvidia/canary-1b` | ~4 GB | EN/ES/FR/DE support. |
 
-### Qwen models
+### Qwen Audio models
 
 | Model | VRAM | Notes |
 |---|---|---|
-| `Qwen/Qwen2-Audio-7B-Instruct` | ~16 GB | **Default.** Best quality. |
-| `Qwen/Qwen2.5-Audio-7B-Instruct` | ~16 GB | Updated 7B variant. |
-| `Qwen/Qwen2.5-Audio-3B-Instruct` | ~8 GB | Faster, lower VRAM. |
-
-### Whisper model sizes
-
-Applies to both `whisper` and `faster-whisper` engines.
-
-| Size | Params | VRAM | Notes |
-|---|---|---|---|
-| `tiny` | 39M | ~1 GB | Fastest, lowest accuracy |
-| `base` | 74M | ~1 GB | |
-| `small` | 244M | ~2 GB | Good CPU choice |
-| `medium` | 769M | ~5 GB | |
-| `large-v2` | 1.5B | ~10 GB | |
-| `large-v3` | 1.5B | ~10 GB | Highest accuracy |
-| `large-v3-turbo` | 809M | ~6 GB | **Recommended for GPU.** Same large-v3 encoder, decoder pruned from 32 → 4 layers. ~8× faster than large-v3 with minimal quality loss. |
+| `Qwen/Qwen2.5-Audio-3B-Instruct` | ~8 GB | Default. Good balance of quality and VRAM. |
+| `Qwen/Qwen2.5-Audio-7B-Instruct` | ~16 GB | Higher quality if VRAM allows. |
 
 ---
 
@@ -75,80 +86,88 @@ Applies to both `whisper` and `faster-whisper` engines.
 ### Docker (recommended)
 
 - [Docker](https://docs.docker.com/get-docker/) with the Compose plugin
-- [just](https://github.com/casey/just) *(optional but recommended — `brew install just`)*
+- [just](https://github.com/casey/just) *(optional — `brew install just` / `cargo install just`)*
 - For GPU: an NVIDIA GPU with [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed on the host
 
-### Local development (no Docker)
+### Local development
 
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) — Python package manager
-- Python 3.13 *(uv installs this automatically)*
-- `ffmpeg` installed on the host (`brew install ffmpeg` / `apt install ffmpeg`)
+- Python 3.12+ *(uv installs this automatically)*
+- `ffmpeg` on PATH (`brew install ffmpeg` / `apt install ffmpeg`)
+- [Node.js](https://nodejs.org/) 20+ (for frontend development only)
 
 ---
 
 ## Quick start
 
 ```bash
-# 1. Clone and enter the project
-git clone <repo-url> whisper-gui
-cd whisper-gui
+# 1. Clone
+git clone <repo-url> lumina
+cd lumina
 
-# 2. Copy and review config
+# 2. Configure
 cp .env.example .env
-$EDITOR .env          # set your engine, model size, port, GPU flag, etc.
+$EDITOR .env   # set OLLAMA_URL, engine, model size, port, GPU flag, etc.
 
 # 3. Start
-just up               # build image + start detached
-# or without just:
-./start.sh -d
+just up        # build image + start detached
+# or:
+docker compose up -d --build
 ```
 
-Open **http://localhost:8080** (or whatever `APP_PORT` you set).
+Open **http://localhost:8880** (or whatever `APP_PORT` you set).
 
-On first start the container downloads the configured model weights into `./volumes/models/`. Subsequent starts reuse the cache and only check for updates.
+On first start the container downloads configured model weights into `./volumes/models/`. Subsequent starts reuse the cache.
+
+> **Ollama required for summarization.** Transcription and enhancement work without it. Point `OLLAMA_URL` at a running Ollama instance and set `OLLAMA_MODEL` to a model you have pulled (e.g. `llama3.2`, `mistral`, `gemma3`).
 
 ---
 
 ## Configuration
 
-All configuration lives in `.env`. The file is extensively commented — copy `.env.example` to get started.
+All runtime configuration is managed through the **Settings UI** and stored in the SQLite database. Environment variables (and `.env`) seed the database on first run only — after that, Settings changes take effect immediately without a restart.
 
-### Key variables
+### Key `.env` variables
 
 ```dotenv
-# Which transcription engine to use
-# Options: whisper | faster-whisper | canary | qwen-audio
+# Port the UI and API are exposed on
+APP_PORT=8880
+
+# Ollama instance for AI summarization
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2
+
+# Transcription engine: faster-whisper | whisper | canary | qwen-audio
 TRANSCRIPTION_ENGINE=faster-whisper
 
-# Whisper/Faster-Whisper model size
-# Options: tiny | base | small | medium | large | large-v2 | large-v3
-WHISPER_MODEL_SIZE=large-v3
+# Model size for faster-whisper / whisper
+WHISPER_MODEL_SIZE=large-v3-turbo
 
-# Expose an NVIDIA GPU to the container
+# GPU support
 ENABLE_GPU=false
+NVIDIA_VISIBLE_DEVICES=all
 
-# Web UI port
-APP_PORT=8080
+# API key for programmatic access (set in Settings UI or here)
+API_KEY=
 
-# Qwen model variant (engine=qwen-audio)
-# Use Qwen2.5-Audio-7B-Instruct instead if you have ~16 GB VRAM available
-QWEN_MODEL=Qwen/Qwen2.5-Audio-3B-Instruct
-
-# Hours before uploaded audio files are auto-purged (0 = disabled)
-AUDIO_CACHE_TTL_HOURS=72
+# Volume paths (host-side)
+MODELS_VOLUME=./volumes/models
+AUDIO_CACHE_VOLUME=./volumes/audio_cache
+DATA_VOLUME=./volumes/data
 ```
 
-See `.env.example` for the full reference including Canary/Qwen model selection, CTranslate2 compute type, language pinning, and volume paths.
+See [`.env.example`](.env.example) for the full reference.
 
 ---
 
 ## GPU setup
 
-### 1. Install nvidia-container-toolkit on the host
+### 1. Install nvidia-container-toolkit
 
 ```bash
 # Ubuntu / Debian
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
   | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
   | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
@@ -157,57 +176,35 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
-### 2. Enable GPU in `.env`
+### 2. Enable in `.env`
 
 ```dotenv
 ENABLE_GPU=true
-NVIDIA_VISIBLE_DEVICES=all   # or: 0, 0,1, etc.
+NVIDIA_VISIBLE_DEVICES=all
 ```
 
 ### 3. Start normally
 
 ```bash
-just up    # automatically includes docker-compose.gpu.yml when ENABLE_GPU=true
-```
-
----
-
-## Canary engine setup
-
-### 1. Set `.env`
-
-```dotenv
-TRANSCRIPTION_ENGINE=canary
-CANARY_MODEL=nvidia/canary-qwen-2.5b   # or nvidia/canary-1b
-ENABLE_GPU=true
-```
-
-### 2. Build and start
-
-```bash
-just build   # NeMo is large — first build will take a while
 just up
 ```
-
-> **Note:** NeMo is included in the standard dependency install (via `uv sync`). `nvidia/canary-qwen-2.5b` is English-only and produces output with punctuation and capitalization. `nvidia/canary-1b` supports EN/ES/FR/DE.
 
 ---
 
 ## Local development
 
-If you want to run the backend outside Docker for faster iteration:
-
 ```bash
-# Install deps (creates backend/.venv with Python 3.13)
+# Install Python deps into backend/.venv
 just install
 
-# Start the dev server with hot-reload
+# Start backend with hot-reload (reads .env automatically)
 just dev
+
+# In a separate terminal — start the frontend dev server
+cd frontend && npm install && npm run dev
 ```
 
-The server reads all env vars from `.env` at the project root, so your model and engine settings carry through automatically.
-
-To pre-download the model before starting:
+The frontend dev server proxies `/api/*` to the backend. Pre-download the configured model first:
 
 ```bash
 just download
@@ -215,19 +212,19 @@ just download
 
 ---
 
-## just recipes
+## `just` recipes
 
 ```
-just check          Verify tools (uv, docker, ffmpeg, GPU) and print current config
-just install        Create backend/.venv and install all Python deps
+just check          Verify tools (uv, docker, ffmpeg, GPU) and print config
+just install        Create backend/.venv and install Python deps
 just dev            Run backend locally with hot-reload
-just download       Pre-download the configured model locally
+just download       Pre-download the configured model weights
 
 just build          Build Docker image
 just rebuild        Force full rebuild (no layer cache)
 
 just up             Start detached (builds if needed)
-just up-fg          Start in foreground — useful for debugging
+just up-fg          Start in foreground
 just restart        Stop then start
 just down           Stop the app
 just down-volumes   Stop and remove anonymous volumes
@@ -244,69 +241,211 @@ just clean-all      Delete all volume data
 
 ---
 
-## Project structure
+## API
+
+All tools are accessible via HTTP on the same port as the UI. Interactive docs are at **`/docs`** (Swagger UI).
+
+### Authentication
+
+Set an API key in **Settings → Security → API Key** or via the `API_KEY` env var. Generate one with:
+
+```bash
+openssl rand -hex 32
+```
+
+Pass it on any request to `/api/*`:
 
 ```
-whisper-gui/
-├── .env.example              # Documented config template
-├── docker-compose.yml        # Base compose (CPU)
-├── docker-compose.gpu.yml    # GPU overlay (merged by start.sh / just)
-├── start.sh                  # Convenience launcher (reads ENABLE_GPU from .env)
-├── justfile                  # Task runner recipes
-└── backend/
-    ├── Dockerfile             # uv + Python 3.13 + CUDA 12.6 base
-    ├── pyproject.toml         # Project deps (uv)
-    ├── entrypoint.sh          # Downloads models then starts uvicorn
-    ├── download_models.py     # Model pre-download / update checker
-    ├── main.py                # FastAPI app — routes and job queue
-    ├── transcriber.py         # Engine loader
-    ├── engines/
-    │   ├── whisper_engine.py
-    │   ├── faster_whisper_engine.py
-    │   ├── canary_engine.py   # Handles both SALM and EncDecMultiTaskModel
-    │   └── qwen_audio_engine.py
-    ├── static/                # Frontend — served directly by FastAPI
-    │   ├── index.html
-    │   ├── style.css
-    │   └── app.js
-    └── cache/                 # Local dev cache (gitignored; Docker uses volumes/)
-        ├── models/
-        └── audio/
-volumes/                       # Created on first run, gitignored (Docker)
-    ├── models/
-    │   ├── hf/                # HuggingFace model cache (faster-whisper, canary, qwen-audio)
-    │   └── whisper/           # openai-whisper .pt files
-    └── audio_cache/           # Uploaded audio files + JSON sidecar metadata
+Authorization: Bearer <key>
+# or
+X-API-Key: <key>
+```
+
+If no API key is configured, the API is open (fine for isolated self-hosted use). Basic Auth (`AUTH_ENABLED=true` in Settings) is a separate option for protecting the UI.
+
+### Transcription
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/transcribe` | Upload audio/video. Returns `{ "job_id" }`. Form field: `file`. |
+| `GET` | `/api/status/{job_id}` | Poll job. Returns `{ status, result, segments, language }`. |
+| `GET` | `/api/export/{job_id}` | Download transcript as `.txt`. |
+| `GET` | `/api/export/{job_id}/srt` | Download as SRT subtitles. |
+| `GET` | `/api/export/{job_id}/vtt` | Download as WebVTT. |
+| `GET` | `/api/audio/{job_id}` | Stream the original audio. |
+| `POST` | `/api/retranscribe/{job_id}` | Re-run transcription on a cached file. |
+| `GET` | `/api/files` | List cached audio files. |
+| `POST` | `/api/clip/{job_id}` | Extract a clip. Body: `{ "start": 0.0, "end": 30.0 }`. |
+
+```bash
+# Upload and poll
+curl -X POST http://localhost:8880/api/transcribe \
+  -H "X-API-Key: $API_KEY" \
+  -F "file=@recording.mp3"
+# → { "job_id": "abc123" }
+
+curl http://localhost:8880/api/status/abc123 \
+  -H "X-API-Key: $API_KEY"
+# → { "status": "done", "result": "Hello world...", "segments": [...] }
+```
+
+### Summarization
+
+All summarization endpoints stream [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events).
+
+| Event field | Value |
+|---|---|
+| `phase` | `{ phase, detail }` — extraction progress |
+| `extracted_content` | Raw extracted text |
+| `text` | Streamed LLM token |
+| `error` | Terminal error |
+| `[DONE]` | Stream complete |
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| `POST` | `/api/summarize` | `{ content, mode, model? }` | Summarize plain text. |
+| `POST` | `/api/summarize/url` | `{ source, url, mode, prefer_captions? }` | Fetch a URL and summarize. `source`: `"youtube"` or `"url"`. |
+| `POST` | `/api/summarize/file` | form: `file`, `file_type`, `mode` | Upload a file (audio, video, PDF) and summarize. |
+| `POST` | `/api/summarize/image` | form: `file`, `mode` | Summarize an image via vision LLM. |
+
+Available `mode` values: `summary`, `key_points`, `mind_map`, `action_items`, `q_and_a`, `meeting_minutes` (customizable in Settings → Prompts).
+
+```bash
+# Summarize a YouTube video
+curl -X POST http://localhost:8880/api/summarize/url \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "source": "youtube", "url": "https://youtu.be/...", "mode": "summary" }'
+
+# Summarize a local audio file
+curl -X POST http://localhost:8880/api/summarize/file \
+  -H "X-API-Key: $API_KEY" \
+  -F "file=@meeting.mp3" \
+  -F "file_type=audio" \
+  -F "mode=meeting_minutes"
+
+# Summarize a web page
+curl -X POST http://localhost:8880/api/summarize/url \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "source": "url", "url": "https://example.com/article", "mode": "key_points" }'
+```
+
+### Chat & Translation
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| `POST` | `/api/chat` | `{ content, messages }` | Multi-turn streaming chat about a document. `messages`: `[{ role, content }]`. |
+| `POST` | `/api/translate` | `{ text, target_language }` | Stream a translation into `target_language`. |
+
+### Audio Enhancement
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/enhance` | Upload audio for enhancement. Returns `{ "job_id" }`. |
+| `GET` | `/api/enhance/{job_id}/download` | Download the enhanced audio. |
+| `GET` | `/api/enhance/{job_id}/original` | Download the original. |
+| `POST` | `/api/reenhance/{job_id}` | Re-run enhancement on a cached file. |
+
+### System
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/info` | Engine name, model, GPU availability. |
+| `GET` | `/api/ready` | Health check — `{ status: "ready" \| "loading" \| "error" }`. |
+| `GET` | `/api/capabilities` | Supported engines and GPU state. |
+| `GET` | `/api/settings` | All current settings. |
+| `PUT` | `/api/settings` | Update settings. Body: partial settings object. |
+
+### Separate API port
+
+The API runs on the same port as the UI by default. To expose it on a dedicated host port, uncomment the `API_PORT` line in `docker-compose.yml`:
+
+```yaml
+ports:
+  - "${APP_PORT:-8880}:8000"
+  - "${API_PORT:-8881}:8000"   # ← uncomment
+```
+
+```dotenv
+# .env
+API_PORT=8881
 ```
 
 ---
 
-## How it works
+## Project structure
 
-1. **Upload** — audio file is POSTed to `/api/transcribe`, saved to the audio cache volume, and a job ID is returned immediately. A JSON sidecar file is written alongside the audio so the file browser survives server restarts.
-2. **Transcription** — runs in a background thread using the pre-loaded engine. The engine is instantiated once at container startup (after model download) so there's no cold-start per request.
-3. **Polling** — the frontend polls `/api/status/{job_id}` every 1.2 seconds until the job is `done` or `error`.
-4. **Result** — the transcript is shown in an editable text area. `/api/audio/{job_id}` streams the original audio back for in-browser playback.
-5. **Export** — `/api/export/{job_id}` returns the transcript as a plain-text file download.
-6. **File browser** — `/api/files` lists all cached audio files from their sidecar metadata. `/api/retranscribe/{job_id}` re-runs transcription on a cached file without re-uploading.
-7. **Cache TTL** — a background task runs hourly and deletes audio files (and their sidecars) older than `AUDIO_CACHE_TTL_HOURS`. Set to `0` to disable.
-
-The job store is in-memory, so active job status is lost on container restart. Audio files and their sidecar metadata persist in the volume.
+```
+lumina/
+├── .env.example              # Fully documented config template
+├── docker-compose.yml        # Base compose
+├── docker-compose.gpu.yml    # GPU overlay
+├── docker-compose.canary.yml # Canary/NeMo overlay
+├── justfile                  # Task runner recipes
+├── start.sh                  # Convenience launcher
+├── unraid/
+│   └── whisper-gui.xml       # Unraid Community Applications template
+├── frontend/
+│   ├── index.html
+│   ├── package.json
+│   └── src/
+│       ├── pages/            # Summarize, Transcribe, Enhance, Batch, Feeds, History, Prompts, Settings
+│       ├── components/       # Layout, ToolCard, MindMapDiagram, EnhancementPanel
+│       ├── api/client.ts     # Typed API client
+│       ├── context/          # SourceCacheContext (cross-tab extraction cache)
+│       └── types/index.ts    # Shared TypeScript types
+└── backend/
+    ├── Dockerfile
+    ├── pyproject.toml        # Python deps (uv)
+    ├── entrypoint.sh         # Downloads models then starts uvicorn
+    ├── main.py               # FastAPI app — all routes
+    ├── db.py                 # SQLite settings, history, prompts, feeds
+    ├── transcriber.py        # Engine loader
+    ├── audio.py              # Enhancement pipeline
+    ├── diarization.py        # Speaker diarization (pyannote.audio)
+    ├── feed_monitor.py       # RSS/podcast background monitor
+    ├── engines/
+    │   ├── whisper_engine.py
+    │   ├── faster_whisper_engine.py
+    │   ├── canary_engine.py
+    │   └── qwen_audio_engine.py
+    ├── extractors/
+    │   ├── audio.py          # Audio → transcript via engine
+    │   ├── video.py          # Video → audio strip → transcript
+    │   ├── youtube.py        # yt-dlp captions or audio → transcript
+    │   ├── webpage.py        # Playwright + readability-lxml
+    │   ├── pdf.py            # pdfplumber
+    │   └── image.py          # base64 → vision LLM
+    └── llm/
+        ├── client.py         # Ollama streaming client
+        ├── prompts.py        # Built-in prompt templates
+        └── context.py        # Context management for chat
+```
 
 ---
 
 ## Disk space
 
-| What | Approximate size |
+| Component | Size |
 |---|---|
 | Docker base image (CUDA + Python) | ~8 GB |
-| faster-whisper / whisper large-v3-turbo | ~1.6 GB |
-| faster-whisper / whisper large-v3 | ~3 GB |
-| nvidia/canary-qwen-2.5b | ~6 GB |
-| nvidia/canary-1b | ~4 GB |
-| Qwen2-Audio-7B | ~15 GB |
+| faster-whisper `large-v3-turbo` | ~1.6 GB |
+| faster-whisper `large-v3` | ~3 GB |
+| `nvidia/canary-qwen-2.5b` | ~6 GB |
+| `nvidia/canary-1b` | ~4 GB |
+| `Qwen2.5-Audio-3B` | ~8 GB |
+| `Qwen2.5-Audio-7B` | ~15 GB |
 
-Model weights are stored in `./volumes/models/` on the host and survive container rebuilds.
+Model weights are stored in `./volumes/models/` and survive container rebuilds.
+
+---
+
+## Unraid
+
+An [Unraid Community Applications](https://unraid.net/community/apps) template is included at [`unraid/whisper-gui.xml`](unraid/whisper-gui.xml). It configures all ports, paths, and environment variables through the Unraid UI.
+
+Set the **Repository** field to your registry image (e.g. `registry.example.com/lumina:latest`) and fill in the **API Key** field to secure programmatic access.
 
 ---
 

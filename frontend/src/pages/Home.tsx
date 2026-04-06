@@ -5,6 +5,10 @@ import {
   Globe,
   FileText,
   AudioWaveform,
+  Clock,
+  BookOpen,
+  Layers,
+  Rss,
 } from 'lucide-react';
 import ToolCard from '../components/ToolCard';
 import './Home.css';
@@ -46,25 +50,49 @@ export default function Home() {
               icon={Youtube}
               title="YouTube"
               description="Paste a YouTube URL — fetches captions instantly, falls back to audio transcription."
-              href="/summarize"
+              href="/summarize?tab=youtube"
             />
             <ToolCard
               icon={Globe}
               title="Webpage"
               description="Extract and summarize article content from any URL using Playwright."
-              href="/summarize"
+              href="/summarize?tab=url"
             />
             <ToolCard
               icon={FileText}
               title="PDF"
               description="Upload a PDF and extract its text content for summarization."
-              href="/summarize"
+              href="/summarize?tab=pdf"
             />
             <ToolCard
               icon={AudioWaveform}
               title="Audio Enhance"
-              description="Improve audio quality before transcription — noise reduction, vocal isolation, super-resolution."
-              comingSoon
+              description="Improve audio quality — noise reduction, vocal isolation, super-resolution."
+              href="/enhance"
+            />
+            <ToolCard
+              icon={Clock}
+              title="History"
+              description="Browse past summarization results — expand any entry to re-read or copy."
+              href="/history"
+            />
+            <ToolCard
+              icon={BookOpen}
+              title="Prompts"
+              description="Manage and customize the AI prompt templates used for each summarization mode."
+              href="/prompts"
+            />
+            <ToolCard
+              icon={Layers}
+              title="Batch"
+              description="Queue multiple audio, PDF, or image files and summarize them all at once."
+              href="/batch"
+            />
+            <ToolCard
+              icon={Rss}
+              title="RSS Monitor"
+              description="Subscribe to RSS or podcast feeds and auto-transcribe new episodes as they arrive."
+              href="/feeds"
             />
           </div>
         </div>

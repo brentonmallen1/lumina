@@ -27,12 +27,20 @@ dependencies = [
     "torch>=2.6.0",
     "torchaudio>=2.6.0",
     "lavasr",
+    # RSS/podcast monitoring
+    "feedparser>=6.0",
+    "apscheduler>=3.10",
 ]
 
 [project.optional-dependencies]
 # NeMo (git trunk required for nvidia/canary-qwen-2.5b SALM support).
 # Install with: uv sync --extra canary
 canary = ["nemo_toolkit[asr]"]
+# Speaker diarization via pyannote.audio.
+# Requires a HuggingFace token and accepting model terms at:
+# https://huggingface.co/pyannote/speaker-diarization-3.1
+# Install with: uv sync --extra diarization
+diarization = ["pyannote.audio>=3.0"]
 
 [tool.uv.sources]
 # On Linux (Docker) use the CUDA 12.6 wheels. On macOS/Windows fall back to

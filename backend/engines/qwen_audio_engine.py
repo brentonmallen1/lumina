@@ -64,6 +64,7 @@ class QwenAudioEngine:
 
         # Strip the prompt tokens from the output.
         generated = output_ids[:, inputs["input_ids"].size(1):]
-        return self._processor.batch_decode(
+        text = self._processor.batch_decode(
             generated, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0].strip()
+        return {"text": text, "segments": [], "language": ""}

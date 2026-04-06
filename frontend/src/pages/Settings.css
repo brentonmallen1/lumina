@@ -63,17 +63,11 @@
 }
 
 .settings-banner--warn {
-  background: rgba(245, 158, 11, 0.08);
-  border-color: rgba(245, 158, 11, 0.3);
-  color: #92400e;
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn-text);
   flex-wrap: wrap;
   gap: 8px;
-}
-
-[data-theme="dark"] .settings-banner--warn {
-  color: #fde68a;
-  background: rgba(245, 158, 11, 0.1);
-  border-color: rgba(245, 158, 11, 0.2);
 }
 
 .settings-restart-btn {
@@ -82,10 +76,10 @@
   gap: 6px;
   margin-left: auto;
   padding: 5px 12px;
-  border: 1px solid rgba(245, 158, 11, 0.4);
+  border: 1px solid var(--warn-border);
   border-radius: var(--radius-sm);
-  background: rgba(245, 158, 11, 0.12);
-  color: #92400e;
+  background: var(--warn-bg);
+  color: var(--warn-text);
   font-size: 0.8rem;
   font-weight: 500;
   font-family: inherit;
@@ -93,13 +87,8 @@
   transition: background 0.15s ease;
 }
 
-[data-theme="dark"] .settings-restart-btn {
-  color: #fde68a;
-  border-color: rgba(245, 158, 11, 0.3);
-}
-
 .settings-restart-btn:hover {
-  background: rgba(245, 158, 11, 0.2);
+  filter: brightness(0.92);
 }
 
 .settings-restart-btn:disabled {
@@ -150,6 +139,13 @@
 .settings-nav-item.active {
   background: var(--accent-subtle);
   color: var(--accent);
+}
+
+.settings-nav-link {
+  text-decoration: none;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
 }
 
 .settings-soon-badge {
@@ -250,6 +246,10 @@
   padding-right: 32px;
 }
 
+[data-theme="dark"] .settings-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239098aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+
 .settings-input:focus,
 .settings-select:focus {
   outline: none;
@@ -292,7 +292,7 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: white;
+  background: var(--accent-text);
   box-shadow: 0 1px 3px rgba(0,0,0,0.2);
   transition: transform 0.2s ease;
 }
@@ -468,9 +468,9 @@
 }
 
 .settings-model-badge--warn {
-  color: var(--warning, #d97706);
-  background: rgba(245, 158, 11, 0.08);
-  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
 }
 
 .settings-model-badge--missing {

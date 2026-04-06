@@ -18,9 +18,24 @@ class WhisperEngine:
         self._model = whisper.load_model(model_size, device=device, download_root=download_root)
         print("[whisper] Ready.")
 
-    def transcribe(self, audio_path: str) -> str:
-        opts: dict = {}
+    def transcribe(self, audio_path: str) -> dict:
+        opts: dict = {"word_timestamps": True}
         if self.language:
             opts["language"] = self.language
         result = self._model.transcribe(audio_path, **opts)
-        return result["text"].strip()
+        return {
+            "text": result["text"].strip(),
+            "segments": [
+                {
+                    "start": seg["start"],
+                    "end":   seg["end"],
+                    "text":  seg["text"],
+                    "words": [
+                        {"word": w["word"], "start": w["start"], "end": w["end"]}
+                        for w in seg.get("words", [])
+                    ],
+                }
+                for seg in result.get("segments", [])
+            ],
+            "language": result.get("language", ""),
+        }

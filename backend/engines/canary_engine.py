@@ -63,13 +63,14 @@ class CanaryEngine:
             return self._transcribe_salm(audio_path)
         return self._transcribe_classic(audio_path)
 
-    def _transcribe_salm(self, audio_path: str) -> str:
+    def _transcribe_salm(self, audio_path: str) -> dict:
         prompt = f"Transcribe the following: {self._model.audio_locator_tag}"
         answer_ids = self._model.generate(
             prompts=[[{"role": "user", "content": prompt, "audio": [audio_path]}]],
             max_new_tokens=512,
         )
-        return self._model.tokenizer.ids_to_text(answer_ids[0].cpu()).strip()
+        text = self._model.tokenizer.ids_to_text(answer_ids[0].cpu()).strip()
+        return {"text": text, "segments": [], "language": ""}
 
     def _transcribe_classic(self, audio_path: str) -> str:
         decode_cfg = self._model.cfg.decoding
@@ -87,4 +88,4 @@ class CanaryEngine:
         result = output[0]
         if isinstance(result, list):
             result = result[0]
-        return str(result).strip()
+        return {"text": str(result).strip(), "segments": [], "language": ""}

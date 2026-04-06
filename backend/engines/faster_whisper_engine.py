@@ -19,9 +19,26 @@ class FasterWhisperEngine:
         self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
         print("[faster-whisper] Ready.")
 
-    def transcribe(self, audio_path: str) -> str:
-        opts: dict = {"beam_size": 5}
+    def transcribe(self, audio_path: str) -> dict:
+        opts: dict = {"beam_size": 5, "word_timestamps": True}
         if self.language:
             opts["language"] = self.language
-        segments, _ = self._model.transcribe(audio_path, **opts)
-        return " ".join(seg.text.strip() for seg in segments).strip()
+        segments, info = self._model.transcribe(audio_path, **opts)
+        seg_list: list[dict] = []
+        full_text: list[str] = []
+        for seg in segments:
+            seg_list.append({
+                "start": seg.start,
+                "end":   seg.end,
+                "text":  seg.text.strip(),
+                "words": [
+                    {"word": w.word, "start": w.start, "end": w.end}
+                    for w in (seg.words or [])
+                ],
+            })
+            full_text.append(seg.text.strip())
+        return {
+            "text":     " ".join(full_text),
+            "segments": seg_list,
+            "language": info.language,
+        }

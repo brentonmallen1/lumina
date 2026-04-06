@@ -240,6 +240,9 @@ export default function Settings() {
                 {label}
               </button>
             ))}
+            <Link to="/prompts" className="settings-nav-item settings-nav-link">
+              Prompts ↗
+            </Link>
           </nav>
 
           {/* Content */}
@@ -611,7 +614,7 @@ export default function Settings() {
                       className="settings-input"
                       value={d.app_name ?? ''}
                       onChange={e => set('app_name', e.target.value)}
-                      placeholder="Distill"
+                      placeholder="Lumina"
                       maxLength={40}
                     />
                   </div>
@@ -625,7 +628,7 @@ export default function Settings() {
                 <div className="settings-section-header">
                   <h2 className="settings-section-title">Security</h2>
                   <p className="settings-section-desc">
-                    HTTP Basic Auth for all endpoints. Enable if exposing to a network.
+                    API key for programmatic access, and optional Basic Auth for the UI.
                   </p>
                 </div>
 
@@ -676,6 +679,48 @@ export default function Settings() {
                     </>
                   )}
                 </div>
+
+                {/* API Key */}
+                <div className="settings-card">
+                  <h3 className="settings-card-title">API Key</h3>
+                  <p className="settings-card-desc">
+                    Bearer token for programmatic access to all API endpoints. When set, requests
+                    with <code>Authorization: Bearer &lt;key&gt;</code> or <code>X-API-Key: &lt;key&gt;</code> bypass Basic Auth.
+                    Generate with: <code>openssl rand -hex 32</code>
+                  </p>
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="api-key">API Key</label>
+                    <input
+                      id="api-key"
+                      type="password"
+                      className="settings-input"
+                      placeholder="Leave blank to disable API key auth"
+                      value={d.api_key ?? ''}
+                      onChange={e => set('api_key', e.target.value)}
+                      autoComplete="off"
+                    />
+                  </div>
+                </div>
+
+                {/* HuggingFace token (for speaker diarization) */}
+                <div className="settings-card">
+                  <h3 className="settings-card-title">HuggingFace Token</h3>
+                  <p className="settings-card-desc">Required for speaker diarization (pyannote.audio). <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer" className="settings-link">Get a token →</a></p>
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="hf-token">Access Token</label>
+                    <input
+                      id="hf-token"
+                      type="password"
+                      className="settings-input"
+                      placeholder="hf_…"
+                      value={d.hf_token ?? ''}
+                      onChange={e => set('hf_token', e.target.value)}
+                      autoComplete="off"
+                    />
+                    <p className="settings-label-hint">Used only for downloading pyannote diarization models.</p>
+                  </div>
+                </div>
+
               </div>
             )}
 

@@ -1,0 +1,47 @@
+.mindmap-container {
+  position: relative;
+  width: 100%;
+  height: 500px;
+  overflow: hidden;
+}
+
+.mindmap-svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Override markmap's hardcoded text color to follow theme */
+.mindmap-svg text {
+  fill: var(--text) !important;
+}
+
+.mindmap-svg .markmap-foreign {
+  color: var(--text);
+}
+
+/* Fit button (bottom-right corner) */
+.mindmap-controls {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  display: flex;
+  gap: 6px;
+}
+
+.mindmap-control-btn {
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.mindmap-control-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}

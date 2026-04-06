@@ -16,6 +16,8 @@
 /* ── Active (clickable) ───────────────────────────────────────────────── */
 .tool-card--active {
   cursor: pointer;
+  text-decoration: none;
+  color: inherit;
 }
 
 .tool-card--active:hover {
@@ -27,6 +29,7 @@
 .tool-card--active:focus-visible {
   box-shadow: var(--focus-ring);
   border-color: var(--accent);
+  outline: none;
 }
 
 /* ── Coming soon (disabled) ───────────────────────────────────────────── */

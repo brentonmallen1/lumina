@@ -8,7 +8,7 @@
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
 /* ── Back link ────────────────────────────────────────────────────────── */
@@ -176,6 +176,26 @@
   cursor: not-allowed;
 }
 
+/* Mode button with a cached result */
+.summarize-mode-btn.has-result {
+  position: relative;
+}
+
+.summarize-mode-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
+.summarize-mode-btn.active .summarize-mode-dot {
+  opacity: 0.8;
+}
+
 /* ── Submit button ────────────────────────────────────────────────────── */
 .summarize-submit-btn {
   display: inline-flex;
@@ -235,6 +255,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* ── Mind map wrapper inside result card ─────────────────────────────── */
+/* MindMapDiagram handles its own container; this ensures it fills the card */
+.summarize-result .mindmap-container {
+  border-radius: 0;
+  border: none;
+  border-top: 1px solid var(--border);
 }
 
 /* ── Thinking indicator ───────────────────────────────────────────────── */
@@ -297,6 +325,64 @@
   word-break: break-word;
 }
 
+/* Markdown-rendered output */
+.summarize-output.markdown {
+  white-space: normal;
+}
+
+.summarize-output.markdown h1,
+.summarize-output.markdown h2,
+.summarize-output.markdown h3,
+.summarize-output.markdown h4 {
+  font-weight: 700;
+  line-height: 1.3;
+  margin: 1em 0 0.4em;
+  color: var(--text);
+}
+
+.summarize-output.markdown h1 { font-size: 1.2rem; }
+.summarize-output.markdown h2 { font-size: 1.05rem; }
+.summarize-output.markdown h3 { font-size: 0.95rem; }
+
+.summarize-output.markdown p {
+  margin: 0 0 0.75em;
+}
+
+.summarize-output.markdown ul,
+.summarize-output.markdown ol {
+  padding-left: 1.4em;
+  margin: 0 0 0.75em;
+}
+
+.summarize-output.markdown li {
+  margin: 0.25em 0;
+}
+
+.summarize-output.markdown strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.summarize-output.markdown code {
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.summarize-output.markdown blockquote {
+  border-left: 3px solid var(--border);
+  margin: 0 0 0.75em;
+  padding-left: 1em;
+  color: var(--text-muted);
+}
+
+/* First child: no top margin */
+.summarize-output.markdown > :first-child { margin-top: 0; }
+.summarize-output.markdown > :last-child  { margin-bottom: 0; }
+
 /* Blinking cursor while streaming */
 .summarize-cursor {
   display: inline-block;
@@ -328,7 +414,7 @@
   padding: 5px 10px;
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-  min-height: 30px;
+  min-height: 36px;
   white-space: nowrap;
 }
 
@@ -340,6 +426,12 @@
 .summarize-action-btn.copied {
   color: var(--success);
   border-color: var(--success);
+}
+
+.summarize-action-btn.active {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .summarize-action-btn--ghost {
@@ -522,4 +614,344 @@
   height: 14px;
   cursor: pointer;
   flex-shrink: 0;
+}
+
+/* ── Reasoning panel ──────────────────────────────────────────────────────── */
+.summarize-reasoning {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.summarize-reasoning-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  background: var(--surface);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.summarize-reasoning-summary::-webkit-details-marker { display: none; }
+
+.summarize-reasoning-summary::before {
+  content: '▶';
+  font-size: 0.6rem;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+details[open] .summarize-reasoning-summary::before {
+  transform: rotate(90deg);
+}
+
+.summarize-reasoning-summary:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.summarize-reasoning-lines {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.summarize-reasoning-body {
+  margin: 0;
+  padding: 14px;
+  font-family: 'Geist Mono', 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* ── Translation panel ────────────────────────────────────────────────────── */
+.summarize-translate-panel {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.summarize-translate-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px;
+}
+
+.summarize-translate-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.summarize-translate-select {
+  padding: 6px 28px 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 0.83rem;
+  color: var(--text);
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  transition: border-color 0.15s ease;
+}
+
+.summarize-translate-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.summarize-translate-result {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-size: 0.9rem;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.summarize-translate-error {
+  font-size: 0.82rem;
+  color: var(--danger-text);
+  margin: 0;
+}
+
+/* ── Chat section ─────────────────────────────────────────────────────────── */
+
+.summarize-chat-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.summarize-chat-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  width: fit-content;
+}
+
+.summarize-chat-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.summarize-chat-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.summarize-chat-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* Notices (compression / truncation) */
+.summarize-chat-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.summarize-chat-notice {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border-left: 3px solid var(--accent);
+  padding: 6px 10px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+/* Message list */
+.summarize-chat-messages {
+  display: flex;
+  flex-direction: column;
+  max-height: 440px;
+  overflow-y: auto;
+  padding: 16px;
+  gap: 14px;
+}
+
+.summarize-chat-empty {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 24px 0;
+}
+
+.summarize-chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 88%;
+}
+
+.summarize-chat-msg--user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.summarize-chat-msg--assistant {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.summarize-chat-msg-role {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.summarize-chat-msg-content {
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--text);
+  padding: 9px 13px;
+  border-radius: var(--radius-sm);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.summarize-chat-msg--user .summarize-chat-msg-content {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+}
+
+.summarize-chat-msg--assistant .summarize-chat-msg-content {
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+/* Thinking dots row (loading indicator) */
+.summarize-thinking-dot-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+/* Input row */
+.summarize-chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.summarize-chat-input {
+  flex: 1;
+  resize: none;
+  padding: 8px 11px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.summarize-chat-input:focus {
+  border-color: var(--accent);
+}
+
+.summarize-chat-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.summarize-chat-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.summarize-chat-send:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.summarize-chat-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Clear history button */
+.summarize-chat-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-end;
+  margin: 0 14px 12px;
+  padding: 4px 10px;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.summarize-chat-clear:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.summarize-chat-clear:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

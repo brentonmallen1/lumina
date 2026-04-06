@@ -8,6 +8,7 @@ Key Ollama endpoints:
   GET  /             — health check ("Ollama is running")
   GET  /api/tags     — list installed models
   POST /api/generate — text completion (streaming or non-streaming)
+  POST /api/chat     — multi-turn chat (streaming or non-streaming)
 
 gemma4 notes:
   - Thinking mode: prepend <|think|> to the system prompt to enable chain-of-thought
@@ -82,6 +83,7 @@ class OllamaClient:
         prompt: str,
         model: str,
         system: str | None = None,
+        images: list[str] | None = None,
         thinking_enabled: bool = True,
         token_budget: int = 280,
         num_ctx: int | None = None,
@@ -94,6 +96,7 @@ class OllamaClient:
             model shows its reasoning before the final answer.
           - token_budget controls visual token allocation (70/140/280/560/1120)
             for image/document tasks; included in options for future multimodal use.
+          - images: optional list of base64-encoded image strings for vision models.
 
         Returns the generated response text.
         """
@@ -108,6 +111,8 @@ class OllamaClient:
         }
         if system_prompt is not None:
             payload["system"] = system_prompt
+        if images:
+            payload["images"] = images
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             r = await client.post(f"{self.base_url}/api/generate", json=payload)
@@ -119,6 +124,7 @@ class OllamaClient:
         prompt: str,
         model: str,
         system: str | None = None,
+        images: list[str] | None = None,
         thinking_enabled: bool = True,
         token_budget: int = 280,
         num_ctx: int | None = None,
@@ -126,6 +132,8 @@ class OllamaClient:
         """
         Streaming text completion — yields response text chunks as they arrive.
         The final (done=True) chunk is not yielded.
+
+        images: optional list of base64-encoded image strings for vision models.
         """
         system_prompt = _build_system_prompt(system, thinking_enabled)
         options = _build_options(token_budget=token_budget, num_ctx=num_ctx)
@@ -138,6 +146,8 @@ class OllamaClient:
         }
         if system_prompt is not None:
             payload["system"] = system_prompt
+        if images:
+            payload["images"] = images
 
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream(
@@ -155,6 +165,58 @@ class OllamaClient:
                         yield text
                     if chunk.get("done"):
                         break
+
+
+    # ── Chat ───────────────────────────────────────────────────────────────────
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        model: str,
+    ) -> AsyncIterator[str]:
+        """
+        Multi-turn streaming chat via /api/chat.
+
+        `messages` is a list of {"role": "system"|"user"|"assistant", "content": "..."}.
+        Yields response text chunks as they arrive.
+        """
+        payload = {
+            "model":    model,
+            "messages": messages,
+            "stream":   True,
+            "options":  _build_options(token_budget=280, num_ctx=None),
+        }
+
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/api/chat",
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+                    text = chunk.get("message", {}).get("content", "")
+                    if text:
+                        yield text
+                    if chunk.get("done"):
+                        break
+
+    async def generate_sync(
+        self,
+        prompt: str,
+        model: str,
+        system: str | None = None,
+    ) -> str:
+        """Non-streaming single-turn completion. Used for internal summarization tasks."""
+        return await self.generate(
+            prompt=prompt,
+            model=model,
+            system=system,
+            thinking_enabled=False,
+        )
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

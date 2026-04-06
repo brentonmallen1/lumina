@@ -5,7 +5,7 @@ set -euo pipefail
 export PATH="/app/.venv/bin:$PATH"
 
 echo "========================================"
-echo " Whisper GUI"
+echo " Lumina"
 echo "========================================"
 
 echo "[entrypoint] Pre-downloading / verifying model weights..."

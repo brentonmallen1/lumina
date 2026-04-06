@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import secrets
+import subprocess
 import tempfile
 import threading
 import time
@@ -25,11 +26,13 @@ if "TORCH_HOME" not in os.environ:
     os.environ["TORCH_HOME"] = str(_CACHE_BASE / "models" / "torch")
 # ──────────────────────────────────────────────────────────────────────────
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
+import db
 from db import init_db, get_all_settings, update_settings as db_update_settings
 from llm import OllamaClient
 from llm.prompts import get_prompt
@@ -75,7 +78,11 @@ def _auth_password() -> str:
 
 
 def _app_name() -> str:
-    return _settings.get("app_name", "Distill")
+    return _settings.get("app_name", "Lumina")
+
+
+def _api_key() -> str:
+    return _settings.get("api_key", "")
 
 
 # Settings that require an engine restart when changed.
@@ -191,15 +198,39 @@ async def lifespan(_: FastAPI):
     if int(_settings.get("audio_cache_ttl_hours", "72")) > 0:
         asyncio.create_task(_purge_loop())
 
+    # Start feed monitor (no-op if feedparser/apscheduler not installed)
+    import feed_monitor
+    feed_monitor.start()
+
     yield
 
+    feed_monitor.stop()
 
-app = FastAPI(title="Distill", lifespan=lifespan)
+
+app = FastAPI(title="Lumina", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ── Auth middleware (covers static asset requests) ─────────────────────────
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    # API key: if set, a matching X-API-Key header or Bearer token on /api/*
+    # grants access regardless of whether Basic Auth is enabled.
+    key = _api_key()
+    if key and request.url.path.startswith("/api/"):
+        auth_hdr = request.headers.get("Authorization", "")
+        candidate = request.headers.get("X-API-Key") or (
+            auth_hdr[7:] if auth_hdr.startswith("Bearer ") else ""
+        )
+        if candidate and secrets.compare_digest(candidate.encode(), key.encode()):
+            return await call_next(request)
+
     if not _auth_enabled():
         return await call_next(request)
 
@@ -231,7 +262,7 @@ async def auth_middleware(request: Request, call_next):
 # ── Engine loading page ────────────────────────────────────────────────────
 def _loading_page(message: str, is_error: bool = False) -> str:
     color = "#ef4444" if is_error else "#6366f1"
-    name = _app_name() if _settings else "Distill"
+    name = _app_name() if _settings else "Lumina"
     spinner = "" if is_error else """
       <div style="width:40px;height:40px;border-radius:50%;
         border:3px solid #c8cdd5;border-top-color:#6366f1;
@@ -403,6 +434,200 @@ async def ollama_models(_: bool = Depends(verify_auth)):
     return {"models": models}
 
 
+# ── Prompts ────────────────────────────────────────────────────────────────
+
+class PromptCreate(BaseModel):
+    name:          str
+    mode:          str
+    system_prompt: str = ""
+    template:      str
+
+
+class PromptUpdate(BaseModel):
+    name:          str
+    system_prompt: str = ""
+    template:      str
+
+
+@app.get("/api/prompts")
+async def list_prompts(_: bool = Depends(verify_auth)):
+    """List all prompts (built-in + custom), ordered built-in first then by name."""
+    return db.get_all_prompts()
+
+
+@app.post("/api/prompts", status_code=201)
+async def create_prompt(body: PromptCreate, _: bool = Depends(verify_auth)):
+    """Create a new custom prompt."""
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="name is required")
+    if not body.template.strip():
+        raise HTTPException(status_code=400, detail="template is required")
+    if "{content}" not in body.template:
+        raise HTTPException(status_code=400, detail="template must contain {content}")
+    return db.create_prompt(
+        name=body.name.strip(),
+        mode=body.mode.strip(),
+        system_prompt=body.system_prompt,
+        template=body.template,
+    )
+
+
+@app.put("/api/prompts/{prompt_id}")
+async def update_prompt(prompt_id: str, body: PromptUpdate, _: bool = Depends(verify_auth)):
+    """Update a prompt (name, system_prompt, template). Mode cannot be changed."""
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="name is required")
+    if "{content}" not in body.template:
+        raise HTTPException(status_code=400, detail="template must contain {content}")
+    result = db.update_prompt(
+        prompt_id=prompt_id,
+        name=body.name.strip(),
+        system_prompt=body.system_prompt,
+        template=body.template,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return result
+
+
+@app.delete("/api/prompts/{prompt_id}", status_code=204)
+async def delete_prompt(prompt_id: str, _: bool = Depends(verify_auth)):
+    """Delete a custom prompt. Built-in prompts cannot be deleted."""
+    ok = db.delete_prompt(prompt_id)
+    if not ok:
+        raise HTTPException(status_code=403, detail="Built-in prompts cannot be deleted")
+
+
+@app.post("/api/prompts/reset")
+async def reset_prompts(_: bool = Depends(verify_auth)):
+    """Reset all built-in prompts to their hardcoded defaults."""
+    db.reset_default_prompts()
+    return {"ok": True}
+
+
+# ── History ────────────────────────────────────────────────────────────────
+
+class HistoryCreate(BaseModel):
+    mode:          str
+    source:        str
+    source_detail: str = ""
+    result:        str
+    reasoning:     str = ""
+
+
+@app.get("/api/history/search")
+async def search_history(q: str = Query(..., min_length=1), _: bool = Depends(verify_auth)):
+    """Full-text search across history results."""
+    return db.search_history(q)
+
+
+@app.get("/api/history")
+async def list_history(_: bool = Depends(verify_auth)):
+    """Return the 50 most recent summarization history entries."""
+    return db.list_history()
+
+
+@app.post("/api/history", status_code=201)
+async def create_history(body: HistoryCreate, _: bool = Depends(verify_auth)):
+    """Save a completed summarization to history."""
+    if not body.result.strip():
+        raise HTTPException(status_code=400, detail="result is required")
+    return db.create_history_entry(
+        mode=body.mode,
+        source=body.source,
+        source_detail=body.source_detail,
+        result=body.result,
+        reasoning=body.reasoning,
+    )
+
+
+@app.delete("/api/history/{entry_id}", status_code=204)
+async def delete_history_entry(entry_id: str, _: bool = Depends(verify_auth)):
+    """Delete a single history entry."""
+    ok = db.delete_history_entry(entry_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+
+@app.delete("/api/history", status_code=204)
+async def clear_history(_: bool = Depends(verify_auth)):
+    """Delete all history entries."""
+    db.clear_history()
+
+
+# ── RSS/Podcast feeds ─────────────────────────────────────────────────────
+
+class FeedCreate(BaseModel):
+    url:              str
+    check_interval:   int  = 3600   # seconds
+    auto_summarize:   bool = True
+    summarize_mode:   str  = "summary"
+
+
+@app.get("/api/feeds")
+async def list_feeds(_: bool = Depends(verify_auth)):
+    return db.list_feeds()
+
+
+@app.post("/api/feeds", status_code=201)
+async def create_feed(body: FeedCreate, _: bool = Depends(verify_auth)):
+    import feed_monitor, feedparser
+
+    available, reason = feed_monitor.check_available()
+    if not available:
+        raise HTTPException(status_code=503, detail=reason)
+
+    # Validate URL and fetch initial title
+    try:
+        parsed = feedparser.parse(body.url)
+        title = parsed.feed.get("title", "") or ""
+    except Exception:
+        title = ""
+
+    feed = db.create_feed(
+        url=body.url,
+        title=title,
+        check_interval=body.check_interval,
+        auto_summarize=body.auto_summarize,
+        summarize_mode=body.summarize_mode,
+    )
+    # Kick off an immediate check in the background
+    threading.Thread(
+        target=feed_monitor.check_feed, args=(feed["id"],), daemon=True
+    ).start()
+    return feed
+
+
+@app.delete("/api/feeds/{feed_id}", status_code=204)
+async def delete_feed(feed_id: str, _: bool = Depends(verify_auth)):
+    ok = db.delete_feed(feed_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Feed not found")
+
+
+@app.get("/api/feeds/{feed_id}/entries")
+async def list_feed_entries(feed_id: str, _: bool = Depends(verify_auth)):
+    return db.list_feed_entries(feed_id)
+
+
+@app.post("/api/feeds/{feed_id}/check")
+async def check_feed_now(feed_id: str, background_tasks: BackgroundTasks, _: bool = Depends(verify_auth)):
+    import feed_monitor
+    available, reason = feed_monitor.check_available()
+    if not available:
+        raise HTTPException(status_code=503, detail=reason)
+    background_tasks.add_task(feed_monitor.check_feed, feed_id)
+    return {"status": "checking"}
+
+
+@app.get("/api/feeds/status")
+async def feeds_status(_: bool = Depends(verify_auth)):
+    """Return whether feed monitoring dependencies are available."""
+    import feed_monitor
+    available, reason = feed_monitor.check_available()
+    return {"available": available, "reason": reason}
+
+
 # ── Audio enhancement models ───────────────────────────────────────────────
 
 @app.get("/api/audio/models")
@@ -439,6 +664,108 @@ async def download_audio_models(req: DownloadModelsRequest, _: bool = Depends(ve
                 yield f"data: {json.dumps({'model': name, 'status': 'done'})}\n\n"
             except Exception as exc:
                 yield f"data: {json.dumps({'model': name, 'status': 'error', 'error': str(exc)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+# ── Translation ───────────────────────────────────────────────────────────
+
+class TranslateRequest(BaseModel):
+    text:            str
+    target_language: str
+    source_language: str = "auto"
+
+
+@app.post("/api/translate")
+async def translate_text(req: TranslateRequest, _: bool = Depends(verify_auth)):
+    """
+    Stream a translation via SSE using the configured Ollama model.
+
+    Events:
+      {"text": "...chunk..."}   — LLM output token
+      {"error": "..."}          — terminal error
+      [DONE]
+    """
+    async def event_stream():
+        model = _settings.get("ollama_model", "")
+        if not model:
+            yield f'data: {json.dumps({"error": "No Ollama model configured — go to Settings → Ollama."})}\n\n'
+            yield "data: [DONE]\n\n"
+            return
+
+        src = "" if req.source_language == "auto" else f" from {req.source_language}"
+        prompt = (
+            f"Translate the following text{src} to {req.target_language}.\n"
+            f"Output ONLY the translation — no explanations, no introductory phrases.\n\n"
+            f"{req.text}"
+        )
+        system = "You are a professional translator. Provide accurate, natural translations."
+        client = _ollama_client()
+        try:
+            async for chunk in client.generate_stream(prompt, model=model, system=system):
+                yield f"data: {json.dumps({'text': chunk})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+# ── Chat ───────────────────────────────────────────────────────────────────
+
+class ChatRequest(BaseModel):
+    content:  str                  # source document text to chat about
+    messages: list[dict]           # conversation history: [{role, content}, ...]
+    model:    str | None = None    # optional model override
+
+
+@app.post("/api/chat")
+async def chat_endpoint(req: ChatRequest, _: bool = Depends(verify_auth)):
+    """
+    Multi-turn chat about a source document, streamed via SSE.
+
+    The source content is injected into the system prompt.  Old history is
+    automatically summarized when the context budget is exceeded.
+
+    Events:
+      {"text": "...chunk..."}         — LLM output token
+      {"notice": "..."}               — informational (context compression, truncation)
+      {"error": "..."}                — terminal error
+      [DONE]
+    """
+    from llm.context import build_system_prompt, prepare_messages
+
+    async def event_stream():
+        model = req.model or _settings.get("ollama_model", "")
+        if not model:
+            yield f'data: {json.dumps({"error": "No Ollama model configured — go to Settings → Ollama to select one."})}\n\n'
+            yield "data: [DONE]\n\n"
+            return
+
+        system_prompt, was_truncated = build_system_prompt(req.content)
+        if was_truncated:
+            yield f"data: {json.dumps({'notice': 'The source content was truncated to fit the context window.'})}\n\n"
+
+        client = _ollama_client()
+        try:
+            messages, compression_notice = await prepare_messages(
+                system_prompt, req.messages, client, model
+            )
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': f'Context preparation failed: {exc}'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        if compression_notice:
+            yield f"data: {json.dumps({'notice': compression_notice})}\n\n"
+
+        try:
+            async for chunk in client.chat_stream(messages, model):
+                yield f"data: {json.dumps({'text': chunk})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -534,6 +861,11 @@ async def _extract_and_summarize_sse(extractor, source_arg, mode: str, model_ove
         yield f"data: {json.dumps({'error': f'Extraction failed: {exc}'})}\n\n"
         yield "data: [DONE]\n\n"
         return
+
+    # Emit extracted text so the frontend can use it for chat
+    # Cap at SOURCE_CONTENT_LIMIT to avoid huge SSE payloads
+    _SOURCE_LIMIT = 32_000
+    yield f"data: {json.dumps({'extracted_content': content[:_SOURCE_LIMIT]})}\n\n"
 
     async for sse_line in _llm_summarize_sse(content, mode, model_override):
         yield sse_line
@@ -640,6 +972,84 @@ async def summarize_url(req: SummarizeUrlRequest, _: bool = Depends(verify_auth)
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
+# ── Summarize from image (vision LLM) ─────────────────────────────────────
+
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+async def _llm_summarize_image_sse(b64: str, mode: str, model_override: str | None):
+    """
+    Async generator — yields SSE lines for an image summarization run.
+    Passes the base64-encoded image to the LLM alongside the mode's prompt.
+    """
+    model = model_override or _settings.get("ollama_model", "")
+    if not model:
+        yield f'data: {json.dumps({"error": "No Ollama model configured — go to Settings → Ollama to select one."})}\n\n'
+        yield "data: [DONE]\n\n"
+        return
+
+    prompt_data = get_prompt(mode)
+    # Substitute {content} with a generic stand-in so existing templates work for images.
+    prompt   = prompt_data["template"].format(content="the provided image")
+    system   = prompt_data["system"]
+    thinking = _settings.get("ollama_thinking_enabled", "true") == "true"
+    budget   = int(_settings.get("ollama_token_budget", "280"))
+
+    try:
+        async for chunk in _ollama_client().generate_stream(
+            prompt, model, system,
+            images=[b64],
+            thinking_enabled=thinking,
+            token_budget=budget,
+        ):
+            yield f"data: {json.dumps({'text': chunk})}\n\n"
+    except Exception as exc:
+        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+    yield "data: [DONE]\n\n"
+
+
+@app.post("/api/summarize/image")
+async def summarize_image(
+    mode: str        = Form("summary"),
+    file: UploadFile = File(...),
+    _:   bool        = Depends(verify_auth),
+):
+    """
+    Upload an image and stream a vision-LLM summary via SSE.
+
+    Requires a vision-capable model (e.g. llava, gemma3, moondream) selected
+    in Settings → Ollama. Text-only models will return an error.
+    """
+    from extractors.image import ImageExtractor
+
+    contents = await file.read()
+    suffix   = Path(file.filename or "image").suffix.lower()
+
+    if suffix not in _IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image type: {suffix}. Allowed: jpg, jpeg, png, webp, gif",
+        )
+
+    tmp = Path(tempfile.mktemp(suffix=suffix))
+    tmp.write_bytes(contents)
+
+    async def event_stream():
+        try:
+            extractor = ImageExtractor()
+            b64 = extractor.extract(tmp)
+            async for sse_line in _llm_summarize_image_sse(b64, mode, None):
+                yield sse_line
+        except ValueError as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
 # ── Transcription ──────────────────────────────────────────────────────────
 def _run_transcription(
     job_id: str,
@@ -668,10 +1078,33 @@ def _run_transcription(
         _jobs[job_id]["status"] = "processing"
 
     try:
-        result = _engine.transcribe(str(enhanced))
+        raw = _engine.transcribe(str(enhanced))
+        # Engines return a dict with text + segments; handle legacy str just in case
+        if isinstance(raw, dict):
+            text     = raw.get("text", "")
+            segments = raw.get("segments", [])
+            language = raw.get("language", "")
+        else:
+            text     = raw
+            segments = []
+            language = ""
+
+        # Persist segments in sidecar for SRT/VTT export
+        sidecar = AUDIO_CACHE / f"{job_id}.json"
+        if sidecar.exists():
+            try:
+                meta = json.loads(sidecar.read_text())
+                meta["segments"] = segments
+                meta["language"] = language
+                sidecar.write_text(json.dumps(meta))
+            except Exception:
+                pass
+
         with _lock:
-            _jobs[job_id]["status"] = "done"
-            _jobs[job_id]["result"] = result
+            _jobs[job_id]["status"]   = "done"
+            _jobs[job_id]["result"]   = text
+            _jobs[job_id]["segments"] = segments
+            _jobs[job_id]["language"] = language
     except Exception as exc:
         with _lock:
             _jobs[job_id]["status"] = "error"
@@ -679,6 +1112,55 @@ def _run_transcription(
     finally:
         if enhanced != audio_path:
             enhanced.unlink(missing_ok=True)
+
+
+def _run_enhancement(
+    job_id: str,
+    audio_path: Path,
+    options: EnhancementOptions,
+) -> None:
+    """Background task: run the enhancement pipeline without transcription."""
+
+    def _status(phase: str, detail: str) -> None:
+        with _lock:
+            _jobs[job_id]["status"]        = "enhancing"
+            _jobs[job_id]["status_detail"] = detail
+
+    try:
+        pipeline = AudioPipeline()
+        enhanced = pipeline.run_sync(audio_path, options, _status)
+
+        if enhanced != audio_path:
+            # Move the temp enhanced file to a stable location in the cache
+            enhanced_name = f"{job_id}_enhanced{enhanced.suffix}"
+            enhanced_path = AUDIO_CACHE / enhanced_name
+            enhanced.rename(enhanced_path)
+        else:
+            # No-op enhancement — serve the original
+            enhanced_path = audio_path
+
+        # Update the sidecar with enhanced file info
+        sidecar = AUDIO_CACHE / f"{job_id}.json"
+        if sidecar.exists():
+            meta = json.loads(sidecar.read_text())
+            meta["enhanced_file"] = enhanced_path.name
+            meta["enhancement_options"] = {
+                "normalize": options.normalize,
+                "denoise":   options.denoise,
+                "isolate":   options.isolate,
+                "upsample":  options.upsample,
+            }
+            sidecar.write_text(json.dumps(meta))
+
+        with _lock:
+            _jobs[job_id]["status"]        = "done"
+            _jobs[job_id]["status_detail"] = ""
+            _jobs[job_id]["enhanced_path"] = str(enhanced_path)
+
+    except Exception as exc:
+        with _lock:
+            _jobs[job_id]["status"] = "error"
+            _jobs[job_id]["error"]  = str(exc)
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -743,6 +1225,8 @@ async def transcribe(
             "status":        "pending",
             "status_detail": "",
             "result":        None,
+            "segments":      [],
+            "language":      "",
             "error":         None,
             "filename":      file.filename,
             "audio_path":    str(audio_path),
@@ -788,6 +1272,224 @@ async def export_txt(job_id: str, _: bool = Depends(verify_auth)):
         job["result"],
         headers={"Content-Disposition": f'attachment; filename="{stem}.txt"'},
     )
+
+
+def _fmt_srt_time(seconds: float) -> str:
+    ms = int(round(seconds * 1000))
+    h, rem = divmod(ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms  = divmod(rem, 1_000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _fmt_vtt_time(seconds: float) -> str:
+    ms = int(round(seconds * 1000))
+    h, rem = divmod(ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms  = divmod(rem, 1_000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+
+def _get_job_segments(job_id: str) -> tuple[dict, list[dict]]:
+    """Return (job, segments) — falls back to sidecar for segments if needed."""
+    with _lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") != "done":
+        raise HTTPException(status_code=400, detail="Transcription not complete")
+    segments = job.get("segments") or []
+    # If job was restored from sidecar (server restart), load segments from disk
+    if not segments:
+        sidecar = AUDIO_CACHE / f"{job_id}.json"
+        if sidecar.exists():
+            try:
+                meta = json.loads(sidecar.read_text())
+                segments = meta.get("segments", [])
+            except Exception:
+                pass
+    return job, segments
+
+
+@app.get("/api/export/{job_id}/srt")
+async def export_srt(job_id: str, _: bool = Depends(verify_auth)):
+    job, segments = _get_job_segments(job_id)
+    if not segments:
+        raise HTTPException(status_code=400, detail="No segment timestamps available for this transcription")
+
+    lines: list[str] = []
+    for i, seg in enumerate(segments, 1):
+        lines.append(str(i))
+        lines.append(f"{_fmt_srt_time(seg['start'])} --> {_fmt_srt_time(seg['end'])}")
+        lines.append(seg["text"].strip())
+        lines.append("")
+    content = "\n".join(lines)
+    stem = _sanitize_filename(Path(job.get("filename") or "subtitles").stem)
+    return PlainTextResponse(
+        content,
+        headers={"Content-Disposition": f'attachment; filename="{stem}.srt"'},
+    )
+
+
+@app.get("/api/export/{job_id}/vtt")
+async def export_vtt(job_id: str, _: bool = Depends(verify_auth)):
+    job, segments = _get_job_segments(job_id)
+    if not segments:
+        raise HTTPException(status_code=400, detail="No segment timestamps available for this transcription")
+
+    lines: list[str] = ["WEBVTT", ""]
+    for seg in segments:
+        lines.append(f"{_fmt_vtt_time(seg['start'])} --> {_fmt_vtt_time(seg['end'])}")
+        lines.append(seg["text"].strip())
+        lines.append("")
+    content = "\n".join(lines)
+    stem = _sanitize_filename(Path(job.get("filename") or "subtitles").stem)
+    return PlainTextResponse(
+        content,
+        media_type="text/vtt",
+        headers={"Content-Disposition": f'attachment; filename="{stem}.vtt"'},
+    )
+
+
+# ── Audio clip extraction ───────────────────────────────────────────────────
+
+class ClipRequest(BaseModel):
+    start:  float       # seconds
+    end:    float       # seconds
+    format: str = "mp3" # mp3 | wav | m4a
+
+
+@app.post("/api/clip/{job_id}")
+async def extract_clip(job_id: str, req: ClipRequest, _: bool = Depends(verify_auth)):
+    """Extract a time-range clip from an uploaded audio file using ffmpeg."""
+    with _lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    audio_path = Path(job.get("audio_path", ""))
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    if req.end <= req.start:
+        raise HTTPException(status_code=400, detail="end must be greater than start")
+
+    allowed_formats = {"mp3", "wav", "m4a", "flac"}
+    fmt = req.format.lower()
+    if fmt not in allowed_formats:
+        raise HTTPException(status_code=400, detail=f"Unsupported format: {fmt}")
+
+    clip_id = str(uuid.uuid4())[:8]
+    clip_name = f"{job_id}_clip_{clip_id}.{fmt}"
+    clip_path = AUDIO_CACHE / clip_name
+
+    codec_map = {"mp3": "libmp3lame", "wav": "pcm_s16le", "m4a": "aac", "flac": "flac"}
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(req.start),
+        "-i", str(audio_path),
+        "-t", str(req.end - req.start),
+        "-c:a", codec_map[fmt],
+        "-vn",
+        str(clip_path),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(status_code=500, detail=f"ffmpeg error: {exc.stderr.decode()[:200]}")
+
+    return {"clip_id": clip_id, "filename": clip_name, "job_id": job_id}
+
+
+@app.get("/api/clip/{job_id}/{clip_id}/download")
+async def download_clip(job_id: str, clip_id: str, _: bool = Depends(verify_auth)):
+    """Download a previously extracted clip."""
+    # Find the clip file — any format suffix
+    matches = list(AUDIO_CACHE.glob(f"{job_id}_clip_{clip_id}.*"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip_path = matches[0]
+    stem = clip_path.stem
+    return FileResponse(clip_path, filename=stem + clip_path.suffix)
+
+
+# ── Speaker Diarization ────────────────────────────────────────────────────
+
+@app.get("/api/diarize/status")
+async def diarize_status(_: bool = Depends(verify_auth)):
+    """Return whether pyannote.audio is installed and a token is configured."""
+    import diarization as diarz
+    available, reason = diarz.check_available()
+    hf_token = _settings.get("hf_token", "")
+    return {
+        "available": available,
+        "reason": reason,
+        "token_configured": bool(hf_token),
+    }
+
+
+@app.post("/api/diarize/{job_id}")
+async def diarize_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    _: bool = Depends(verify_auth),
+):
+    """
+    Run speaker diarization on the audio from a completed transcription job.
+    Returns the diarization result (list of speaker segments) synchronously.
+    The job's transcript segments are merged with speaker labels and stored.
+    """
+    with _lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") != "done":
+        raise HTTPException(status_code=400, detail="Transcription must be complete before diarizing")
+
+    audio_path = Path(job.get("audio_path", ""))
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    hf_token = _settings.get("hf_token", "")
+
+    import diarization as diarz
+
+    available, reason = diarz.check_available()
+    if not available:
+        raise HTTPException(status_code=503, detail=reason)
+    if not hf_token:
+        raise HTTPException(
+            status_code=400,
+            detail="HuggingFace token not configured — set it in Settings → Security."
+        )
+
+    try:
+        raw_diarization = await asyncio.get_event_loop().run_in_executor(
+            None, diarz.diarize, audio_path, hf_token
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Diarization failed: {exc}")
+
+    # Merge speaker labels into existing transcript segments
+    segments = job.get("segments", [])
+    merged = diarz.merge_with_transcript(raw_diarization, segments)
+
+    with _lock:
+        _jobs[job_id]["segments"] = merged
+        _jobs[job_id]["diarization"] = raw_diarization
+
+    # Persist merged segments to sidecar
+    sidecar = AUDIO_CACHE / f"{job_id}.json"
+    if sidecar.exists():
+        try:
+            meta = json.loads(sidecar.read_text())
+            meta["segments"] = merged
+            meta["diarization"] = raw_diarization
+            sidecar.write_text(json.dumps(meta))
+        except Exception:
+            pass
+
+    return {"segments": merged, "diarization": raw_diarization}
 
 
 @app.get("/api/files")
@@ -850,6 +1552,171 @@ async def retranscribe(
         }
 
     background_tasks.add_task(_run_transcription, new_job_id, audio_path, opts)
+    return {"job_id": new_job_id}
+
+
+# ── Audio Enhancement ──────────────────────────────────────────────────────
+
+@app.post("/api/enhance")
+async def enhance_audio(
+    background_tasks: BackgroundTasks,
+    file:              UploadFile = File(...),
+    enhance_normalize: bool       = Form(False),
+    enhance_denoise:   bool       = Form(False),
+    enhance_isolate:   bool       = Form(False),
+    enhance_upsample:  bool       = Form(False),
+    _: bool = Depends(verify_auth),
+):
+    """Upload an audio file and run the enhancement pipeline (no transcription)."""
+    suffix = Path(file.filename or "audio").suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {suffix}. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
+
+    contents = await file.read()
+    size_mb  = len(contents) / (1024 * 1024)
+    max_mb   = int(_settings.get("max_upload_size_mb", "500"))
+
+    if max_mb > 0 and size_mb > max_mb:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large: {size_mb:.1f} MB. Maximum: {max_mb} MB",
+        )
+
+    job_id     = str(uuid.uuid4())
+    audio_path = AUDIO_CACHE / f"{job_id}{suffix}"
+
+    with open(audio_path, "wb") as f:
+        f.write(contents)
+
+    sidecar = AUDIO_CACHE / f"{job_id}.json"
+    sidecar.write_text(json.dumps({
+        "job_id":      job_id,
+        "filename":    file.filename,
+        "audio_file":  audio_path.name,
+        "size":        audio_path.stat().st_size,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "type":        "enhance",
+    }))
+
+    opts = EnhancementOptions(
+        normalize=enhance_normalize,
+        denoise  =enhance_denoise,
+        isolate  =enhance_isolate,
+        upsample =enhance_upsample,
+    )
+
+    with _lock:
+        _jobs[job_id] = {
+            "status":        "pending",
+            "status_detail": "",
+            "result":        None,
+            "error":         None,
+            "filename":      file.filename,
+            "audio_path":    str(audio_path),
+            "enhanced_path": None,
+        }
+
+    background_tasks.add_task(_run_enhancement, job_id, audio_path, opts)
+    return {"job_id": job_id}
+
+
+@app.get("/api/enhance/{job_id}/download")
+async def download_enhanced(job_id: str, _: bool = Depends(verify_auth)):
+    """Download the enhanced audio file produced by a completed enhance job."""
+    with _lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=400, detail="Enhancement not complete")
+
+    enhanced_path = Path(job.get("enhanced_path") or "")
+    if not enhanced_path.exists():
+        raise HTTPException(status_code=404, detail="Enhanced file not found")
+
+    stem   = _sanitize_filename(Path(job.get("filename") or "audio").stem)
+    suffix = enhanced_path.suffix
+    return FileResponse(
+        enhanced_path,
+        media_type="application/octet-stream",
+        filename=f"{stem}_enhanced{suffix}",
+    )
+
+
+@app.get("/api/enhance/{job_id}/original")
+async def download_original_for_enhance(job_id: str, _: bool = Depends(verify_auth)):
+    """Serve the original (pre-enhancement) audio for A/B comparison."""
+    with _lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    audio_path = Path(job.get("audio_path") or "")
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    filename = _sanitize_filename(job.get("filename") or audio_path.name)
+    return FileResponse(audio_path, media_type="audio/mpeg", filename=filename)
+
+
+class ReenhanceRequest(BaseModel):
+    enhance_normalize: bool = False
+    enhance_denoise:   bool = False
+    enhance_isolate:   bool = False
+    enhance_upsample:  bool = False
+
+
+@app.post("/api/reenhance/{job_id}")
+async def reenhance(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    req: ReenhanceRequest = ReenhanceRequest(),
+    _: bool = Depends(verify_auth),
+):
+    """Re-run enhancement on an existing file with different settings."""
+    sidecar = AUDIO_CACHE / f"{job_id}.json"
+    if not sidecar.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    meta       = json.loads(sidecar.read_text())
+    audio_path = AUDIO_CACHE / meta["audio_file"]
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    opts = EnhancementOptions(
+        normalize=req.enhance_normalize,
+        denoise  =req.enhance_denoise,
+        isolate  =req.enhance_isolate,
+        upsample =req.enhance_upsample,
+    )
+
+    new_job_id  = str(uuid.uuid4())
+    new_sidecar = AUDIO_CACHE / f"{new_job_id}.json"
+    new_sidecar.write_text(json.dumps({
+        "job_id":        new_job_id,
+        "filename":      meta.get("filename"),
+        "audio_file":    meta["audio_file"],   # reuse same original
+        "size":          meta.get("size"),
+        "uploaded_at":   datetime.now(timezone.utc).isoformat(),
+        "type":          "enhance",
+        "original_job":  job_id,
+    }))
+
+    with _lock:
+        _jobs[new_job_id] = {
+            "status":        "pending",
+            "status_detail": "",
+            "result":        None,
+            "error":         None,
+            "filename":      meta.get("filename"),
+            "audio_path":    str(audio_path),
+            "enhanced_path": None,
+        }
+
+    background_tasks.add_task(_run_enhancement, new_job_id, audio_path, opts)
     return {"job_id": new_job_id}
 
 

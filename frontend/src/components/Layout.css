@@ -60,9 +60,10 @@
 .layout-nav-btn {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
+  gap: 5px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
   text-decoration: none;
@@ -81,6 +82,11 @@
 .layout-nav-btn.active {
   color: var(--accent);
   background: var(--accent-subtle);
+}
+
+.layout-nav-label {
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 /* ── Main content ─────────────────────────────────────────────────────── */

@@ -3,6 +3,7 @@ from .video import VideoExtractor
 from .youtube import YouTubeExtractor
 from .pdf import PDFExtractor
 from .webpage import WebpageExtractor
+from .image import ImageExtractor
 
 __all__ = [
     "AudioExtractor",
@@ -10,4 +11,5 @@ __all__ = [
     "YouTubeExtractor",
     "PDFExtractor",
     "WebpageExtractor",
+    "ImageExtractor",
 ]
