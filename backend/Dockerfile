@@ -68,6 +68,9 @@ COPY --from=node-builder /repo/backend/static ./static
 
 RUN chmod +x entrypoint.sh && mkdir -p /models/hf /models/whisper /cache/audio /data
 
+# Install Playwright's Chromium browser + OS deps (needed by WebpageExtractor).
+RUN uv run playwright install chromium --with-deps
+
 EXPOSE 8000
 
 ENTRYPOINT ["./entrypoint.sh"]

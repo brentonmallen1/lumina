@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import secrets
+import tempfile
 import threading
 import time
 import uuid
@@ -21,11 +22,14 @@ if "WHISPER_DOWNLOAD_ROOT" not in os.environ:
     os.environ["WHISPER_DOWNLOAD_ROOT"] = str(_CACHE_BASE / "models" / "whisper")
 # ──────────────────────────────────────────────────────────────────────────
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response, StreamingResponse
+from pydantic import BaseModel
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from db import init_db, get_all_settings, update_settings as db_update_settings
+from llm import OllamaClient
+from llm.prompts import get_prompt
 from transcriber import load_engine
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -36,6 +40,9 @@ AUDIO_CACHE.mkdir(parents=True, exist_ok=True)
 
 # Allowed audio extensions — structural constraint, not a runtime setting.
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm", ".opus", ".aac", ".wma"}
+
+# File extensions routed to VideoExtractor (ffmpeg audio strip first).
+_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v"}
 
 security = HTTPBasic(auto_error=False)
 
@@ -277,6 +284,44 @@ async def get_ready():
     return {"status": _engine_status, "message": _engine_message}
 
 
+# ── Capabilities ───────────────────────────────────────────────────────────
+@app.get("/api/capabilities")
+async def get_capabilities(_: bool = Depends(verify_auth)):
+    """
+    Report which transcription engines are actually usable in this environment.
+    Used by the Settings UI to disable options that can't be selected.
+
+    Checks:
+      faster-whisper / whisper — always available (base deps)
+      canary     — requires NeMo, only installed with --extra canary
+      qwen-audio — always has transformers but requires a CUDA GPU
+    """
+    import importlib.util
+    import torch
+
+    gpu = torch.cuda.is_available()
+
+    nemo = importlib.util.find_spec("nemo") is not None
+
+    return {
+        "gpu": gpu,
+        "engines": {
+            "faster-whisper": {"available": True},
+            "whisper":        {"available": True},
+            "canary":         {
+                "available": nemo and gpu,
+                "reason":    None if (nemo and gpu)
+                             else ("NeMo not installed — rebuild with INSTALL_CANARY=true" if not nemo
+                                   else "Requires a CUDA GPU"),
+            },
+            "qwen-audio":     {
+                "available": gpu,
+                "reason":    None if gpu else "Requires a CUDA GPU",
+            },
+        },
+    }
+
+
 # ── Engine info ────────────────────────────────────────────────────────────
 @app.get("/api/info")
 async def get_info(_: bool = Depends(verify_auth)):
@@ -321,6 +366,221 @@ async def reload_engine(_: bool = Depends(verify_auth)):
     thread = threading.Thread(target=_load_engine_background, daemon=True)
     thread.start()
     return {"status": "reloading"}
+
+
+# ── Ollama ─────────────────────────────────────────────────────────────────
+
+def _ollama_client() -> OllamaClient:
+    """Construct an OllamaClient from the current live settings."""
+    return OllamaClient(
+        base_url=_settings.get("ollama_url", "http://localhost:11434"),
+        timeout=float(_settings.get("ollama_timeout", "120")),
+    )
+
+
+@app.get("/api/ollama/test")
+async def ollama_test():
+    """
+    Test connectivity to the configured Ollama instance.
+    No auth required — called from the Settings UI before credentials are confirmed.
+    Returns {"ok": bool, "message": str}.
+    """
+    result = await _ollama_client().test_connection()
+    return result
+
+
+@app.get("/api/ollama/models")
+async def ollama_models(_: bool = Depends(verify_auth)):
+    """
+    List models installed in the configured Ollama instance.
+    Returns {"models": [{name, size, parameter_size}, ...]} or empty list on error.
+    """
+    models = await _ollama_client().list_models()
+    return {"models": models}
+
+
+# ── Summarization ──────────────────────────────────────────────────────────
+
+class SummarizeRequest(BaseModel):
+    content: str
+    mode: str = "summary"       # summary | key_points | mind_map
+    model: str | None = None    # override the model from settings
+
+
+@app.post("/api/summarize")
+async def summarize_content(req: SummarizeRequest, _: bool = Depends(verify_auth)):
+    """
+    Stream an AI summary of plain text content via Server-Sent Events.
+
+    Emits:  data: {"text": "..."}  |  data: [DONE]  |  data: {"error": "..."}
+    The gemma4 thinking block (<|channel>...<channel|>) is passed through as-is.
+    """
+    async def event_stream():
+        async for sse_line in _llm_summarize_sse(req.content, req.mode, req.model):
+            yield sse_line
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
+# ── Shared LLM streaming helper ────────────────────────────────────────────
+
+async def _llm_summarize_sse(content: str, mode: str, model_override: str | None):
+    """
+    Async generator — yields SSE lines for an LLM summarization run.
+    Shared by all three /api/summarize* endpoints.
+    """
+    model = model_override or _settings.get("ollama_model", "")
+    if not model:
+        yield f'data: {json.dumps({"error": "No Ollama model configured — go to Settings → Ollama to select one."})}\n\n'
+        yield "data: [DONE]\n\n"
+        return
+
+    prompt_data = get_prompt(mode)
+    prompt      = prompt_data["template"].format(content=content)
+    system      = prompt_data["system"]
+    thinking    = _settings.get("ollama_thinking_enabled", "true") == "true"
+    budget      = int(_settings.get("ollama_token_budget", "280"))
+
+    try:
+        async for chunk in _ollama_client().generate_stream(
+            prompt, model, system,
+            thinking_enabled=thinking,
+            token_budget=budget,
+        ):
+            yield f"data: {json.dumps({'text': chunk})}\n\n"
+    except Exception as exc:
+        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+    yield "data: [DONE]\n\n"
+
+
+async def _extract_and_summarize_sse(extractor, source_arg, mode: str, model_override: str | None):
+    """
+    Async generator that:
+      1. Runs an extractor, forwarding status events as SSE phase events.
+      2. Streams the LLM summarization of the extracted content.
+    """
+    q: asyncio.Queue = asyncio.Queue()
+
+    async def on_status(phase: str, detail: str) -> None:
+        q.put_nowait({"phase": phase, "detail": detail})
+
+    extract_task = asyncio.create_task(extractor.extract(source_arg, on_status))
+
+    # Forward phase events while extraction runs
+    while not extract_task.done():
+        try:
+            yield f"data: {json.dumps(q.get_nowait())}\n\n"
+        except asyncio.QueueEmpty:
+            await asyncio.sleep(0.05)
+
+    # Drain any remaining events
+    while not q.empty():
+        yield f"data: {json.dumps(q.get_nowait())}\n\n"
+
+    # Unwrap result or surface error
+    try:
+        content = extract_task.result()
+    except Exception as exc:
+        yield f"data: {json.dumps({'error': f'Extraction failed: {exc}'})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    async for sse_line in _llm_summarize_sse(content, mode, model_override):
+        yield sse_line
+
+
+_SSE_HEADERS = {"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
+
+
+# ── Summarize from file (audio / video / PDF) ──────────────────────────────
+
+@app.post("/api/summarize/file")
+async def summarize_file(
+    source: str       = Form(...),         # "audio" | "pdf"
+    mode: str         = Form("summary"),
+    file: UploadFile  = File(...),
+    _: bool           = Depends(verify_auth),
+):
+    """
+    Upload a file and stream an AI summary via SSE.
+
+    source="audio"  — audio or video file → Whisper → LLM
+    source="pdf"    — PDF file → pdfplumber → LLM
+    """
+    from extractors.audio   import AudioExtractor
+    from extractors.video   import VideoExtractor
+    from extractors.pdf     import PDFExtractor
+
+    contents = await file.read()
+    suffix   = Path(file.filename or "upload").suffix.lower()
+
+    tmp = Path(tempfile.mktemp(suffix=suffix))
+    tmp.write_bytes(contents)
+
+    async def event_stream():
+        try:
+            if source == "pdf":
+                extractor = PDFExtractor()
+            elif source == "audio":
+                if suffix in _VIDEO_EXTENSIONS:
+                    extractor = VideoExtractor(engine=_engine)
+                else:
+                    extractor = AudioExtractor(engine=_engine)
+            else:
+                yield f"data: {json.dumps({'error': f'Unknown source type: {source}'})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            async for sse_line in _extract_and_summarize_sse(extractor, tmp, mode, None):
+                yield sse_line
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+# ── Summarize from URL (YouTube / webpage) ─────────────────────────────────
+
+class SummarizeUrlRequest(BaseModel):
+    source: str             # "youtube" | "url"
+    url: str
+    mode: str = "summary"
+    model: str | None = None
+    prefer_captions: bool = True   # YouTube: try captions first
+
+
+@app.post("/api/summarize/url")
+async def summarize_url(req: SummarizeUrlRequest, _: bool = Depends(verify_auth)):
+    """
+    Fetch a URL and stream an AI summary via SSE.
+
+    source="youtube" — yt-dlp captions (fast) or audio download → Whisper → LLM
+    source="url"     — Playwright page fetch → readability → LLM
+    """
+    from extractors.youtube import YouTubeExtractor
+    from extractors.webpage import WebpageExtractor
+
+    async def event_stream():
+        if req.source == "youtube":
+            extractor = YouTubeExtractor(engine=_engine, prefer_captions=req.prefer_captions)
+            source_arg = req.url
+        elif req.source == "url":
+            extractor = WebpageExtractor()
+            source_arg = req.url
+        else:
+            yield f"data: {json.dumps({'error': f'Unknown source type: {req.source}'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        async for sse_line in _extract_and_summarize_sse(extractor, source_arg, req.mode, req.model):
+            yield sse_line
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 # ── Transcription ──────────────────────────────────────────────────────────

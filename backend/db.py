@@ -35,10 +35,12 @@ _DEFAULTS: dict[str, str] = {
     "auth_enabled":           os.getenv("AUTH_ENABLED", "false"),
     "auth_username":          os.getenv("AUTH_USERNAME", "admin"),
     "auth_password":          os.getenv("AUTH_PASSWORD", ""),
-    # Ollama (Phase 2)
-    "ollama_url":             os.getenv("OLLAMA_URL", "http://localhost:11434"),
-    "ollama_model":           os.getenv("OLLAMA_MODEL", ""),
-    "ollama_timeout":         os.getenv("OLLAMA_TIMEOUT", "120"),
+    # Ollama
+    "ollama_url":              os.getenv("OLLAMA_URL", "http://localhost:11434"),
+    "ollama_model":            os.getenv("OLLAMA_MODEL", ""),
+    "ollama_timeout":          os.getenv("OLLAMA_TIMEOUT", "120"),
+    "ollama_thinking_enabled": os.getenv("OLLAMA_THINKING_ENABLED", "true"),
+    "ollama_token_budget":     os.getenv("OLLAMA_TOKEN_BUDGET", "280"),
 }
 
 

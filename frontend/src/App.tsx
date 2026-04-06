@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Home from './pages/Home';
+import Summarize from './pages/Summarize';
 import Transcribe from './pages/Transcribe';
 import Settings from './pages/Settings';
 
@@ -10,6 +11,7 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Home />} />
+          <Route path="/summarize" element={<Summarize />} />
           <Route path="/transcribe" element={<Transcribe />} />
           <Route path="/settings" element={<Settings />} />
           {/* Fallback */}

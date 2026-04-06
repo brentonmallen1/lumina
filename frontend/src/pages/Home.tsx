@@ -26,8 +26,8 @@ export default function Home() {
           <ToolCard
             icon={Sparkles}
             title="Summarize"
-            description="The full pipeline — bring in content from any source, transcribe audio and video, then use AI to extract summaries, key points, mind maps, and more."
-            comingSoon
+            description="Summarize content from any source — text, audio, video, YouTube, web pages, and PDFs — using AI."
+            href="/summarize"
             featured
           />
         </div>
@@ -45,20 +45,20 @@ export default function Home() {
             <ToolCard
               icon={Youtube}
               title="YouTube"
-              description="Paste a YouTube URL to download and transcribe the audio track."
-              comingSoon
+              description="Paste a YouTube URL — fetches captions instantly, falls back to audio transcription."
+              href="/summarize"
             />
             <ToolCard
               icon={Globe}
               title="Webpage"
               description="Extract and summarize article content from any URL using Playwright."
-              comingSoon
+              href="/summarize"
             />
             <ToolCard
               icon={FileText}
               title="PDF"
               description="Upload a PDF and extract its text content for summarization."
-              comingSoon
+              href="/summarize"
             />
             <ToolCard
               icon={AudioWaveform}

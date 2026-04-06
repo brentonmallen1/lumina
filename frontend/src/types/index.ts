@@ -42,6 +42,24 @@ export interface Settings {
   ollama_url: string;
   ollama_model: string;
   ollama_timeout: string;
+  ollama_thinking_enabled: string;
+  ollama_token_budget: string;
+}
+
+export interface EngineCapability {
+  available: boolean;
+  reason: string | null;
+}
+
+export interface Capabilities {
+  gpu: boolean;
+  engines: Record<string, EngineCapability>;
+}
+
+export interface OllamaModel {
+  name: string;
+  size: number;
+  parameter_size: string;
 }
 
 export interface SettingsUpdateResponse {

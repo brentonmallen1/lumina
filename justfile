@@ -41,13 +41,17 @@ check:
     @echo "  PORT:    ${APP_PORT:-8080}"
 
 # Install all dependencies — Python backend + Node frontend (recommended for first setup)
-install: _install-python install-ui
+install: _install-python install-playwright install-ui
     @echo ""
     @echo "Done. Run \`just dev\` to start the dev servers."
 
 # Install only Python deps into backend/.venv
 _install-python:
     cd backend && uv sync
+
+# Install Playwright's Chromium browser (required by the webpage extractor)
+install-playwright:
+    cd backend && uv run playwright install chromium
 
 # Install frontend npm dependencies
 install-ui:
@@ -74,6 +78,7 @@ dev-api:
 
 # Run only the Vite dev server (proxies /api to API server).
 # Auto-installs npm deps if node_modules is missing.
+# Passes API_PORT so vite.config.ts proxies to the correct port.
 dev-ui:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -81,7 +86,7 @@ dev-ui:
         echo "node_modules not found — running npm install..."
         cd frontend && npm install
     fi
-    cd frontend && npm run dev
+    cd frontend && API_PORT="${APP_PORT:-8080}" npm run dev
 
 # Build the React frontend into backend/static/
 build-ui:

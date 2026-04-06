@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ArrowLeft, Save, RefreshCw, AlertTriangle, Check } from 'lucide-react';
+import { ArrowLeft, Save, RefreshCw, AlertTriangle, Check, Wifi, WifiOff, Loader } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import * as api from '../api/client';
-import type { Settings as SettingsType } from '../types';
+import type { Capabilities, OllamaModel, Settings as SettingsType } from '../types';
 import './Settings.css';
 
 type Section = 'transcription' | 'application' | 'security' | 'ollama';
@@ -41,12 +41,22 @@ export default function Settings() {
   const [restarting, setRestarting]       = useState(false);
   const [error, setError]                 = useState('');
 
+  // Capabilities
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+
+  // Ollama
+  const [ollamaModels, setOllamaModels]       = useState<OllamaModel[]>([]);
+  const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false);
+  const [testingConn, setTestingConn]         = useState(false);
+  const [connStatus, setConnStatus]           = useState<{ ok: boolean; message: string } | null>(null);
+
   const loadSettings = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api.getSettings();
+      const [data, caps] = await Promise.all([api.getSettings(), api.getCapabilities()]);
       setSettings(data);
       setDraft(data);
+      setCapabilities(caps);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -56,8 +66,37 @@ export default function Settings() {
 
   useEffect(() => { loadSettings(); }, [loadSettings]);
 
+  const loadOllamaModels = useCallback(async () => {
+    setOllamaModelsLoading(true);
+    try {
+      const { models } = await api.getOllamaModels();
+      setOllamaModels(models);
+    } catch {
+      setOllamaModels([]);
+    } finally {
+      setOllamaModelsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (section === 'ollama') loadOllamaModels();
+  }, [section, loadOllamaModels]);
+
   const set = (key: keyof SettingsType, value: string) => {
     setDraft(d => ({ ...d, [key]: value }));
+  };
+
+  const handleTestConnection = async () => {
+    setTestingConn(true);
+    setConnStatus(null);
+    try {
+      const result = await api.testOllamaConnection();
+      setConnStatus(result);
+    } catch {
+      setConnStatus({ ok: false, message: 'Request failed' });
+    } finally {
+      setTestingConn(false);
+    }
   };
 
   const handleSave = async () => {
@@ -148,11 +187,10 @@ export default function Settings() {
             ).map(([key, label]) => (
               <button
                 key={key}
-                className={`settings-nav-item ${section === key ? 'active' : ''} ${key === 'ollama' ? 'soon' : ''}`}
+                className={`settings-nav-item ${section === key ? 'active' : ''}`}
                 onClick={() => setSection(key)}
               >
                 {label}
-                {key === 'ollama' && <span className="settings-soon-badge">Phase 2</span>}
               </button>
             ))}
           </nav>
@@ -179,9 +217,15 @@ export default function Settings() {
                       value={d.transcription_engine ?? ''}
                       onChange={e => set('transcription_engine', e.target.value)}
                     >
-                      {ENGINE_OPTIONS.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
+                      {ENGINE_OPTIONS.map(o => {
+                        const cap = capabilities?.engines[o.value];
+                        const unavailable = cap && !cap.available;
+                        return (
+                          <option key={o.value} value={o.value} disabled={!!unavailable}>
+                            {o.label}{unavailable && cap?.reason ? ` — ${cap.reason}` : ''}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
 
@@ -236,41 +280,132 @@ export default function Settings() {
               </div>
             )}
 
-            {/* ── Ollama (Phase 2) ───────────────────────────────────── */}
+            {/* ── Ollama ─────────────────────────────────────────────── */}
             {section === 'ollama' && (
               <div className="settings-section">
                 <div className="settings-section-header">
                   <h2 className="settings-section-title">Ollama</h2>
                   <p className="settings-section-desc">
-                    AI summarization via a local Ollama instance. Coming in Phase 2.
+                    AI summarization via a local Ollama instance. Optimized for gemma4.
                   </p>
                 </div>
                 <div className="settings-fields">
+
+                  {/* URL + Test Connection */}
                   <div className="settings-field">
-                    <label className="settings-label" htmlFor="ollama-url">Ollama URL</label>
-                    <input
-                      id="ollama-url"
-                      type="url"
-                      className="settings-input"
-                      value={d.ollama_url ?? ''}
-                      onChange={e => set('ollama_url', e.target.value)}
-                      placeholder="http://localhost:11434"
-                    />
+                    <label className="settings-label" htmlFor="ollama-url">Server URL</label>
+                    <div className="settings-test-row">
+                      <input
+                        id="ollama-url"
+                        type="url"
+                        className="settings-input"
+                        value={d.ollama_url ?? ''}
+                        onChange={e => { set('ollama_url', e.target.value); setConnStatus(null); }}
+                        placeholder="http://localhost:11434"
+                      />
+                      <button
+                        className="settings-test-btn"
+                        onClick={handleTestConnection}
+                        disabled={testingConn}
+                        type="button"
+                      >
+                        {testingConn
+                          ? <Loader size={14} className="spinning" aria-hidden="true" />
+                          : <Wifi size={14} aria-hidden="true" />}
+                        {testingConn ? 'Testing…' : 'Test'}
+                      </button>
+                    </div>
+                    {connStatus && (
+                      <div className={`settings-connection-status ${connStatus.ok ? 'ok' : 'err'}`}>
+                        {connStatus.ok
+                          ? <Check size={13} aria-hidden="true" />
+                          : <WifiOff size={13} aria-hidden="true" />}
+                        {connStatus.message}
+                      </div>
+                    )}
                   </div>
+
+                  {/* Model dropdown */}
                   <div className="settings-field">
                     <label className="settings-label" htmlFor="ollama-model">
                       Model
-                      <span className="settings-label-hint">Auto-populated from Ollama in Phase 2</span>
+                      <span className="settings-label-hint">
+                        {ollamaModelsLoading
+                          ? 'Loading models…'
+                          : ollamaModels.length === 0
+                            ? 'No models found — run `ollama pull gemma4:27b` to install'
+                            : `${ollamaModels.length} model${ollamaModels.length !== 1 ? 's' : ''} available`}
+                      </span>
                     </label>
-                    <input
-                      id="ollama-model"
-                      type="text"
-                      className="settings-input"
-                      value={d.ollama_model ?? ''}
-                      onChange={e => set('ollama_model', e.target.value)}
-                      placeholder="e.g. llama3.2"
-                    />
+                    {ollamaModels.length > 0 ? (
+                      <select
+                        id="ollama-model"
+                        className="settings-select"
+                        value={d.ollama_model ?? ''}
+                        onChange={e => set('ollama_model', e.target.value)}
+                      >
+                        <option value="">— select a model —</option>
+                        {ollamaModels.map(m => (
+                          <option key={m.name} value={m.name}>
+                            {m.name}{m.parameter_size ? ` (${m.parameter_size})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        id="ollama-model"
+                        type="text"
+                        className="settings-input"
+                        value={d.ollama_model ?? ''}
+                        onChange={e => set('ollama_model', e.target.value)}
+                        placeholder="e.g. gemma4:27b"
+                      />
+                    )}
                   </div>
+
+                  {/* Thinking Mode */}
+                  <div className="settings-field">
+                    <div className="settings-toggle-row">
+                      <div>
+                        <p className="settings-label" style={{ marginBottom: 2 }}>Enable Thinking Mode</p>
+                        <p className="settings-label-hint" style={{ margin: 0 }}>
+                          Model reasons step-by-step before answering (gemma4 <code>&lt;|think|&gt;</code> token)
+                        </p>
+                      </div>
+                      <button
+                        className={`settings-toggle ${d.ollama_thinking_enabled === 'true' ? 'on' : ''}`}
+                        role="switch"
+                        aria-checked={d.ollama_thinking_enabled === 'true'}
+                        onClick={() => set('ollama_thinking_enabled', d.ollama_thinking_enabled === 'true' ? 'false' : 'true')}
+                      >
+                        <span className="settings-toggle-thumb" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Token Budget */}
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="ollama-budget">
+                      Visual Token Budget
+                      <span className="settings-label-hint">
+                        Controls image/document processing detail. Higher = more accurate, slower.
+                      </span>
+                    </label>
+                    <select
+                      id="ollama-budget"
+                      className="settings-select settings-input--narrow"
+                      value={d.ollama_token_budget ?? '280'}
+                      onChange={e => set('ollama_token_budget', e.target.value)}
+                    >
+                      <option value="70">70 — Fastest, basic classification</option>
+                      <option value="140">140 — Quick captioning, video</option>
+                      <option value="280">280 — Balanced (default)</option>
+                      <option value="560">560 — Detailed OCR, documents</option>
+                      <option value="1120">1120 — Maximum detail, small text</option>
+                    </select>
+                  </div>
+
+                  {/* Timeout */}
                   <div className="settings-field">
                     <label className="settings-label" htmlFor="ollama-timeout">Timeout (seconds)</label>
                     <input
@@ -283,6 +418,7 @@ export default function Settings() {
                       max="600"
                     />
                   </div>
+
                 </div>
               </div>
             )}

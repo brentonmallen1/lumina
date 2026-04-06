@@ -301,6 +301,70 @@
   transform: translateX(20px);
 }
 
+/* ── Ollama: URL + test button row ───────────────────────────────────── */
+.settings-test-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.settings-test-row .settings-input {
+  flex: 1;
+}
+
+.settings-test-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  color: var(--text);
+  font-size: 0.83rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  min-height: 38px;
+}
+
+.settings-test-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.settings-test-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── Ollama: connection status ────────────────────────────────────────── */
+.settings-connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-connection-status.ok {
+  color: var(--success);
+  background: rgba(26, 158, 74, 0.08);
+  border: 1px solid rgba(26, 158, 74, 0.25);
+}
+
+.settings-connection-status.err {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+}
+
 /* ── Save bar ─────────────────────────────────────────────────────────── */
 .settings-save-bar {
   display: flex;
