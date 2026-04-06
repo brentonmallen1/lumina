@@ -1,0 +1,479 @@
+/* ── Page ─────────────────────────────────────────────────────────────── */
+.transcribe-page {
+  padding: 32px 24px 60px;
+}
+
+.transcribe-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── Back link ────────────────────────────────────────────────────────── */
+.transcribe-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  padding: 4px 0;
+  transition: color 0.15s ease;
+  width: fit-content;
+}
+
+.transcribe-back:hover {
+  color: var(--text);
+}
+
+/* ── Page header ──────────────────────────────────────────────────────── */
+.transcribe-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.transcribe-header-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.transcribe-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  margin: 0;
+}
+
+.transcribe-subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── Tabs ─────────────────────────────────────────────────────────────── */
+.transcribe-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.transcribe-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 10px 18px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.transcribe-tab:hover {
+  color: var(--text);
+}
+
+.transcribe-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ── Drop zone ────────────────────────────────────────────────────────── */
+.transcribe-dropzone {
+  background: var(--surface);
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 48px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+  text-align: center;
+}
+
+.transcribe-dropzone:hover,
+.transcribe-dropzone.dragging {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  box-shadow: 0 0 0 4px var(--accent-shadow);
+}
+
+.transcribe-dropzone:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
+.transcribe-dropzone-icon {
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.transcribe-dropzone.dragging .transcribe-dropzone-icon {
+  color: var(--accent);
+}
+
+.transcribe-dropzone-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.transcribe-dropzone-sub {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.transcribe-dropzone-formats {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+}
+
+/* ── Progress ─────────────────────────────────────────────────────────── */
+.transcribe-progress {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: var(--shadow);
+}
+
+.transcribe-progress-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.transcribe-progress-track {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.transcribe-progress-bar {
+  height: 100%;
+  width: 40%;
+  background: var(--accent);
+  border-radius: 2px;
+  animation: transcribe-progress-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes transcribe-progress-slide {
+  0%   { transform: translateX(-200%); }
+  100% { transform: translateX(350%); }
+}
+
+.transcribe-progress-label {
+  font-size: 0.83rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── Result ───────────────────────────────────────────────────────────── */
+.transcribe-result {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: var(--shadow);
+}
+
+.transcribe-result-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.transcribe-result-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.transcribe-result-heading {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.transcribe-result-words {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 2px 8px;
+}
+
+.transcribe-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ── Audio player ─────────────────────────────────────────────────────── */
+.transcribe-audio {
+  width: 100%;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  accent-color: var(--accent);
+}
+
+/* ── Transcript textarea ──────────────────────────────────────────────── */
+.transcribe-textarea {
+  width: 100%;
+  min-height: 280px;
+  max-height: 60vh;
+  resize: vertical;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', monospace;
+  font-size: 0.85rem;
+  line-height: 1.7;
+  color: var(--text);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.transcribe-textarea:focus {
+  outline: none;
+}
+
+.transcribe-textarea.editable {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  caret-color: var(--accent);
+}
+
+.transcribe-textarea.editable:focus {
+  box-shadow: var(--focus-ring);
+}
+
+/* ── Error ────────────────────────────────────────────────────────────── */
+.transcribe-error {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.transcribe-error-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: white;
+  font-size: 1.2rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.transcribe-error-msg {
+  font-size: 0.9rem;
+  color: var(--danger-text);
+  margin: 0;
+  max-width: 400px;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────── */
+.transcribe-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 0.83rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 7px 12px;
+  min-height: 34px;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  white-space: nowrap;
+}
+
+.transcribe-btn:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.transcribe-btn--primary {
+  background: var(--accent);
+  color: white;
+}
+
+.transcribe-btn--primary:hover {
+  background: var(--accent-hover);
+}
+
+.transcribe-btn--secondary {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.transcribe-btn--secondary:hover {
+  border-color: var(--border-hover);
+  background: var(--border);
+}
+
+.transcribe-btn--secondary.active {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.transcribe-btn--secondary.copied {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.transcribe-btn--ghost {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.transcribe-btn--ghost:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.transcribe-btn--sm {
+  font-size: 0.78rem;
+  padding: 5px 10px;
+  min-height: 28px;
+}
+
+/* ── Files list ───────────────────────────────────────────────────────── */
+.transcribe-files-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.transcribe-file-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  transition: border-color 0.15s ease;
+}
+
+.transcribe-file-item:hover {
+  border-color: var(--border-hover);
+}
+
+.transcribe-file-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.transcribe-file-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.transcribe-file-name {
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.transcribe-file-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* ── Empty state ──────────────────────────────────────────────────────── */
+.transcribe-files-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 24px;
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.transcribe-files-empty-icon {
+  color: var(--border);
+  margin-bottom: 4px;
+}
+
+.transcribe-files-empty-sub {
+  font-size: 0.82rem;
+  color: var(--border-hover);
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .transcribe-page {
+    padding: 20px 16px 48px;
+  }
+
+  .transcribe-result-header {
+    flex-direction: column;
+  }
+
+  .transcribe-dropzone {
+    padding: 36px 20px;
+  }
+}

@@ -1,9 +1,12 @@
 .env
 volumes/
 backend/cache/
+backend/static/
 __pycache__/
 *.pyc
 *.pyo
 .pyo
 .DS_Store
 .venv/
+frontend/node_modules/
+frontend/dist/

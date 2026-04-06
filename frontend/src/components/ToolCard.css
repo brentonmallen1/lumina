@@ -1,0 +1,132 @@
+/* ── Base card ────────────────────────────────────────────────────────── */
+.tool-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+}
+
+/* ── Active (clickable) ───────────────────────────────────────────────── */
+.tool-card--active {
+  cursor: pointer;
+}
+
+.tool-card--active:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-hover), 0 0 0 1px var(--accent);
+  transform: translateY(-1px);
+}
+
+.tool-card--active:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
+/* ── Coming soon (disabled) ───────────────────────────────────────────── */
+.tool-card--coming-soon {
+  opacity: 0.65;
+  cursor: default;
+}
+
+/* ── Featured variant (full-width, larger) ────────────────────────────── */
+.tool-card--featured {
+  padding: 24px 28px;
+  background: linear-gradient(135deg, var(--accent-subtle) 0%, var(--surface) 60%);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.tool-card--featured .tool-card-title {
+  font-size: 1.15rem;
+}
+
+.tool-card--featured .tool-card-description {
+  font-size: 0.9rem;
+}
+
+/* ── Top row: icon + badge ────────────────────────────────────────────── */
+.tool-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-card-icon-wrap {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.tool-card--featured .tool-card-icon-wrap {
+  width: 44px;
+  height: 44px;
+}
+
+/* ── Coming soon badge ────────────────────────────────────────────────── */
+.tool-card-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+/* ── Body ─────────────────────────────────────────────────────────────── */
+.tool-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-card-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+  line-height: 1.3;
+}
+
+.tool-card-description {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ── Footer CTA ───────────────────────────────────────────────────────── */
+.tool-card-footer {
+  margin-top: 4px;
+}
+
+.tool-card-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.tool-card--active:hover .tool-card-cta svg {
+  transform: translateX(2px);
+  transition: transform 0.15s ease;
+}

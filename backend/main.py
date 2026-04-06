@@ -3,7 +3,6 @@ import base64
 import json
 import os
 import secrets
-import shutil
 import threading
 import time
 import uuid
@@ -25,81 +24,117 @@ if "WHISPER_DOWNLOAD_ROOT" not in os.environ:
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.staticfiles import StaticFiles
 
+from db import init_db, get_all_settings, update_settings as db_update_settings
 from transcriber import load_engine
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
+# Audio cache path — env-var only since changing it at runtime would orphan files.
 AUDIO_CACHE = Path(os.getenv("AUDIO_CACHE_DIR", _CACHE_BASE / "audio"))
 AUDIO_CACHE.mkdir(parents=True, exist_ok=True)
 
-# 0 = disabled; positive integer = hours before cached audio files are purged.
-AUDIO_CACHE_TTL_HOURS = int(os.getenv("AUDIO_CACHE_TTL_HOURS", "72"))
-
-# Maximum upload size in MB. 0 = unlimited.
-MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "500"))
-
-# Allowed audio file extensions (lowercase, with dot).
+# Allowed audio extensions — structural constraint, not a runtime setting.
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm", ".opus", ".aac", ".wma"}
-
-# ── Authentication ─────────────────────────────────────────────────────────
-# Set AUTH_ENABLED=true to require HTTP Basic Auth for all endpoints.
-AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() in ("true", "1", "yes")
-AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
-AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "")
 
 security = HTTPBasic(auto_error=False)
 
+# ── Settings (DB-backed) ───────────────────────────────────────────────────
+# Loaded at startup via init_db() + _reload_settings(), then refreshed
+# whenever the /api/settings PUT endpoint is called.
+_settings: dict[str, str] = {}
 
+
+def _reload_settings() -> None:
+    global _settings
+    _settings = get_all_settings()
+
+
+# Helpers — always read from the live _settings dict.
+def _auth_enabled() -> bool:
+    return _settings.get("auth_enabled", "false").lower() in ("true", "1", "yes")
+
+
+def _auth_username() -> str:
+    return _settings.get("auth_username", "admin")
+
+
+def _auth_password() -> str:
+    return _settings.get("auth_password", "")
+
+
+def _app_name() -> str:
+    return _settings.get("app_name", "Distill")
+
+
+# Settings that require an engine restart when changed.
+_ENGINE_SETTINGS = {"transcription_engine", "whisper_model_size", "compute_type", "language"}
+
+# ── Authentication ─────────────────────────────────────────────────────────
 def verify_auth(credentials: HTTPBasicCredentials | None = Depends(security)) -> bool:
     """Verify HTTP Basic Auth credentials if auth is enabled."""
-    if not AUTH_ENABLED:
+    if not _auth_enabled():
         return True
 
-    if not AUTH_PASSWORD:
-        # Auth enabled but no password set — reject all requests with helpful error
+    pwd = _auth_password()
+    if not pwd:
         raise HTTPException(
             status_code=500,
-            detail="AUTH_ENABLED=true but AUTH_PASSWORD is not set. "
-                   "Set AUTH_PASSWORD in your environment or disable auth.",
+            detail="auth_enabled=true but auth_password is not set. Configure it in Settings.",
         )
 
     if credentials is None:
         raise HTTPException(
             status_code=401,
             detail="Authentication required",
-            headers={"WWW-Authenticate": "Basic realm=\"Whisper GUI\""},
+            headers={"WWW-Authenticate": f'Basic realm="{_app_name()}"'},
         )
 
-    # Use constant-time comparison to prevent timing attacks
-    username_ok = secrets.compare_digest(credentials.username.encode(), AUTH_USERNAME.encode())
-    password_ok = secrets.compare_digest(credentials.password.encode(), AUTH_PASSWORD.encode())
+    username_ok = secrets.compare_digest(credentials.username.encode(), _auth_username().encode())
+    password_ok = secrets.compare_digest(credentials.password.encode(), pwd.encode())
 
     if not (username_ok and password_ok):
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic realm=\"Whisper GUI\""},
+            headers={"WWW-Authenticate": f'Basic realm="{_app_name()}"'},
         )
 
     return True
 
-# In-memory job store. Fine for single-user self-hosted use.
+
+# ── In-memory job store ────────────────────────────────────────────────────
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
 
-# Engine state — loaded in a background thread so the server starts immediately.
+# ── Engine state ───────────────────────────────────────────────────────────
 _engine = None
 _engine_status = "loading"   # loading | ready | error
 _engine_message = "Starting up..."
 
 
 def _load_engine_background() -> None:
+    """Load (or reload) the transcription engine in a background thread.
+
+    Sets env vars from DB settings before calling load_engine() so that
+    existing engine files (which read from os.environ) pick up the right values.
+    """
     global _engine, _engine_status, _engine_message
 
-    engine_name = os.getenv("TRANSCRIPTION_ENGINE", "faster-whisper")
-    model_name = os.getenv("WHISPER_MODEL_SIZE", "large-v3-turbo")
+    engine_name = _settings.get("transcription_engine", "faster-whisper")
+    model_name  = _settings.get("whisper_model_size", "large-v3-turbo")
+    compute     = _settings.get("compute_type", "int8")
+    language    = _settings.get("language", "")
+
+    # Propagate DB settings into environment so engine files pick them up.
+    os.environ["TRANSCRIPTION_ENGINE"] = engine_name
+    os.environ["WHISPER_MODEL_SIZE"]   = model_name
+    os.environ["COMPUTE_TYPE"]         = compute
+    if language:
+        os.environ["LANGUAGE"] = language
+    elif "LANGUAGE" in os.environ:
+        del os.environ["LANGUAGE"]
+
     _engine_message = f"Loading {engine_name} · {model_name}…"
 
     try:
@@ -112,8 +147,11 @@ def _load_engine_background() -> None:
 
 
 def _purge_old_audio() -> None:
-    """Delete audio files (and their sidecars) older than AUDIO_CACHE_TTL_HOURS."""
-    cutoff = time.time() - (AUDIO_CACHE_TTL_HOURS * 3600)
+    """Delete audio files (and their sidecars) older than audio_cache_ttl_hours."""
+    ttl = int(_settings.get("audio_cache_ttl_hours", "72"))
+    if ttl <= 0:
+        return
+    cutoff = time.time() - (ttl * 3600)
     for f in list(AUDIO_CACHE.iterdir()):
         try:
             if f.stat().st_mtime < cutoff:
@@ -123,7 +161,7 @@ def _purge_old_audio() -> None:
 
 
 async def _purge_loop() -> None:
-    _purge_old_audio()          # run once at startup to clean up expired files
+    _purge_old_audio()
     while True:
         await asyncio.sleep(3600)
         _purge_old_audio()
@@ -131,59 +169,60 @@ async def _purge_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Init DB and load settings BEFORE starting the engine thread so
+    # _load_engine_background reads the correct DB-backed values.
+    init_db()
+    _reload_settings()
+
     thread = threading.Thread(target=_load_engine_background, daemon=True)
     thread.start()
-    if AUDIO_CACHE_TTL_HOURS > 0:
+
+    if int(_settings.get("audio_cache_ttl_hours", "72")) > 0:
         asyncio.create_task(_purge_loop())
+
     yield
 
 
-app = FastAPI(title="Whisper GUI", lifespan=lifespan)
+app = FastAPI(title="Distill", lifespan=lifespan)
 
 
-# ── Auth middleware for static files ─────────────────────────────────────────
-# FastAPI's StaticFiles mount doesn't use Depends(), so we need middleware.
+# ── Auth middleware (covers static asset requests) ─────────────────────────
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    # Skip auth check if auth is disabled
-    if not AUTH_ENABLED:
+    if not _auth_enabled():
         return await call_next(request)
 
-    # Check if password is configured
-    if not AUTH_PASSWORD:
+    pwd = _auth_password()
+    if not pwd:
         return Response(
-            content="AUTH_ENABLED=true but AUTH_PASSWORD is not set.",
+            content="auth_enabled=true but auth_password is not set.",
             status_code=500,
         )
 
-    # Check Authorization header
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Basic "):
         try:
             decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
             username, password = decoded.split(":", 1)
-            username_ok = secrets.compare_digest(username.encode(), AUTH_USERNAME.encode())
-            password_ok = secrets.compare_digest(password.encode(), AUTH_PASSWORD.encode())
-            if username_ok and password_ok:
+            if (secrets.compare_digest(username.encode(), _auth_username().encode()) and
+                    secrets.compare_digest(password.encode(), pwd.encode())):
                 return await call_next(request)
         except Exception:
             pass
 
-    # Return 401 with WWW-Authenticate header to trigger browser login prompt
     return Response(
         content="Authentication required",
         status_code=401,
-        headers={"WWW-Authenticate": "Basic realm=\"Whisper GUI\""},
+        headers={"WWW-Authenticate": f'Basic realm="{_app_name()}"'},
     )
 
 
-# ── Root — serve loading page or main app depending on engine state ───────────
-
+# ── Engine loading page ────────────────────────────────────────────────────
 def _loading_page(message: str, is_error: bool = False) -> str:
     color = "#ef4444" if is_error else "#6366f1"
+    name = _app_name() if _settings else "Distill"
     spinner = "" if is_error else """
-      <div style="
-        width:40px;height:40px;border-radius:50%;
+      <div style="width:40px;height:40px;border-radius:50%;
         border:3px solid #c8cdd5;border-top-color:#6366f1;
         animation:spin .8s linear infinite;margin-bottom:20px;
       "></div>
@@ -198,7 +237,7 @@ def _loading_page(message: str, is_error: bool = False) -> str:
             if (d.message) el.textContent = d.message;
             if (d.status === 'ready')  { location.reload(); return; }
             if (d.status === 'error')  { el.textContent = 'Error: ' + d.message; return; }
-          } catch (_) { el.textContent = 'Waiting for server…'; }
+          } catch (_) { el.textContent = 'Waiting for server\u2026'; }
           setTimeout(poll, 1500);
         };
         poll();
@@ -209,7 +248,7 @@ def _loading_page(message: str, is_error: bool = False) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Whisper GUI</title>
+  <title>{name}</title>
   <style>
     *{{box-sizing:border-box;margin:0;padding:0}}
     body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -217,21 +256,13 @@ def _loading_page(message: str, is_error: bool = False) -> str:
           justify-content:center;min-height:100vh;}}
     .card{{background:#eef0f3;border:1px solid #c8cdd5;border-radius:12px;
            padding:48px 40px;text-align:center;max-width:420px;width:90%;}}
-    svg{{color:#6366f1;margin-bottom:16px}}
     h1{{font-size:1.3rem;font-weight:700;color:#1e2330;margin-bottom:24px}}
     p{{font-size:.88rem;line-height:1.6;color:{color}}}
   </style>
 </head>
 <body>
   <div class="card">
-    <svg width="32" height="32" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" stroke-width="2">
-      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-      <line x1="12" y1="19" x2="12" y2="23"/>
-      <line x1="8" y1="23" x2="16" y2="23"/>
-    </svg>
-    <h1>Whisper GUI</h1>
+    <h1>{name}</h1>
     {spinner}
     <p id="msg">{message}</p>
   </div>
@@ -240,24 +271,59 @@ def _loading_page(message: str, is_error: bool = False) -> str:
 </html>"""
 
 
-@app.get("/", response_class=HTMLResponse)
-async def root(_: bool = Depends(verify_auth)):
-    if _engine_status == "ready":
-        return FileResponse(_STATIC_DIR / "index.html")
-    if _engine_status == "error":
-        return HTMLResponse(_loading_page(_engine_message, is_error=True), status_code=500)
-    return HTMLResponse(_loading_page(_engine_message))
-
-
-# ── Readiness ─────────────────────────────────────────────────────────────────
-
+# ── Readiness (no auth — called by loading page before credentials exist) ──
 @app.get("/api/ready")
-async def get_ready(_: bool = Depends(verify_auth)):
+async def get_ready():
     return {"status": _engine_status, "message": _engine_message}
 
 
-# ── Transcription ─────────────────────────────────────────────────────────────
+# ── Engine info ────────────────────────────────────────────────────────────
+@app.get("/api/info")
+async def get_info(_: bool = Depends(verify_auth)):
+    import torch
+    gpu_available = torch.cuda.is_available()
+    return {
+        "status":        _engine_status,
+        "engine":        _settings.get("transcription_engine", "faster-whisper"),
+        "model":         _engine.model_name if _engine else None,
+        "gpu_available": gpu_available,
+        "gpu_name":      torch.cuda.get_device_name(0) if gpu_available else None,
+    }
 
+
+# ── Settings API ───────────────────────────────────────────────────────────
+@app.get("/api/settings")
+async def get_settings(_: bool = Depends(verify_auth)):
+    return get_all_settings()
+
+
+@app.put("/api/settings")
+async def put_settings(updates: dict[str, str], _: bool = Depends(verify_auth)):
+    old = get_all_settings()
+    new = db_update_settings(updates)
+    _reload_settings()
+
+    engine_changed = any(
+        old.get(k) != new.get(k)
+        for k in _ENGINE_SETTINGS
+        if k in updates
+    )
+
+    return {"settings": new, "restart_required": engine_changed}
+
+
+@app.post("/api/reload-engine")
+async def reload_engine(_: bool = Depends(verify_auth)):
+    """Re-initialize the transcription engine using current DB settings."""
+    global _engine_status, _engine_message
+    _engine_status  = "loading"
+    _engine_message = "Reloading engine..."
+    thread = threading.Thread(target=_load_engine_background, daemon=True)
+    thread.start()
+    return {"status": "reloading"}
+
+
+# ── Transcription ──────────────────────────────────────────────────────────
 def _run_transcription(job_id: str, audio_path: Path) -> None:
     with _lock:
         _jobs[job_id]["status"] = "processing"
@@ -269,14 +335,11 @@ def _run_transcription(job_id: str, audio_path: Path) -> None:
     except Exception as exc:
         with _lock:
             _jobs[job_id]["status"] = "error"
-            _jobs[job_id]["error"] = str(exc)
+            _jobs[job_id]["error"]  = str(exc)
 
 
 def _sanitize_filename(filename: str) -> str:
-    """Sanitize filename for Content-Disposition header."""
-    # Remove any path components and problematic characters
     name = Path(filename).name
-    # Remove characters that could break headers or cause issues
     return "".join(c for c in name if c.isalnum() or c in "._- ").strip() or "audio"
 
 
@@ -289,7 +352,6 @@ async def transcribe(
     if _engine_status != "ready":
         raise HTTPException(status_code=503, detail="Engine is still loading — please wait.")
 
-    # Validate file extension
     suffix = Path(file.filename or "audio").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -297,38 +359,37 @@ async def transcribe(
             detail=f"Unsupported file type: {suffix}. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
-    # Validate file size (read into memory to check, then write)
     contents = await file.read()
     size_mb = len(contents) / (1024 * 1024)
+    max_mb  = int(_settings.get("max_upload_size_mb", "500"))
 
-    if MAX_UPLOAD_SIZE_MB > 0 and size_mb > MAX_UPLOAD_SIZE_MB:
+    if max_mb > 0 and size_mb > max_mb:
         raise HTTPException(
             status_code=413,
-            detail=f"File too large: {size_mb:.1f} MB. Maximum: {MAX_UPLOAD_SIZE_MB} MB",
+            detail=f"File too large: {size_mb:.1f} MB. Maximum: {max_mb} MB",
         )
 
-    job_id = str(uuid.uuid4())
+    job_id     = str(uuid.uuid4())
     audio_path = AUDIO_CACHE / f"{job_id}{suffix}"
 
     with open(audio_path, "wb") as f:
         f.write(contents)
 
-    # Persist metadata so the file browser survives server restarts.
     sidecar = AUDIO_CACHE / f"{job_id}.json"
     sidecar.write_text(json.dumps({
-        "job_id": job_id,
-        "filename": file.filename,
-        "audio_file": audio_path.name,
-        "size": audio_path.stat().st_size,
+        "job_id":      job_id,
+        "filename":    file.filename,
+        "audio_file":  audio_path.name,
+        "size":        audio_path.stat().st_size,
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
     }))
 
     with _lock:
         _jobs[job_id] = {
-            "status": "pending",
-            "result": None,
-            "error": None,
-            "filename": file.filename,
+            "status":     "pending",
+            "result":     None,
+            "error":      None,
+            "filename":   file.filename,
             "audio_path": str(audio_path),
         }
 
@@ -402,7 +463,7 @@ async def retranscribe(
     if not sidecar.exists():
         raise HTTPException(status_code=404, detail="File not found")
 
-    meta = json.loads(sidecar.read_text())
+    meta       = json.loads(sidecar.read_text())
     audio_path = AUDIO_CACHE / meta["audio_file"]
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail="Audio file not found")
@@ -410,10 +471,10 @@ async def retranscribe(
     new_job_id = str(uuid.uuid4())
     with _lock:
         _jobs[new_job_id] = {
-            "status": "pending",
-            "result": None,
-            "error": None,
-            "filename": meta.get("filename"),
+            "status":     "pending",
+            "result":     None,
+            "error":      None,
+            "filename":   meta.get("filename"),
             "audio_path": str(audio_path),
         }
 
@@ -421,19 +482,30 @@ async def retranscribe(
     return {"job_id": new_job_id}
 
 
-@app.get("/api/info")
-async def get_info(_: bool = Depends(verify_auth)):
-    import torch
+# ── SPA catch-all — must be the last route registered ─────────────────────
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str, _: bool = Depends(verify_auth)):
+    # Show loading/error page while the engine is initializing.
+    if _engine_status != "ready":
+        if _engine_status == "error":
+            return HTMLResponse(_loading_page(_engine_message, is_error=True), status_code=500)
+        return HTMLResponse(_loading_page(_engine_message))
 
-    gpu_available = torch.cuda.is_available()
-    return {
-        "status": _engine_status,
-        "engine": os.getenv("TRANSCRIPTION_ENGINE", "faster-whisper"),
-        "model": _engine.model_name if _engine else None,
-        "gpu_available": gpu_available,
-        "gpu_name": torch.cuda.get_device_name(0) if gpu_available else None,
-    }
+    # Serve real static files (favicon, assets/, etc.) — protect against traversal.
+    if full_path:
+        candidate = (_STATIC_DIR / full_path).resolve()
+        try:
+            if str(candidate).startswith(str(_STATIC_DIR.resolve())) and candidate.is_file():
+                return FileResponse(candidate)
+        except (OSError, ValueError):
+            pass
 
+    # All other paths → React SPA entry point.
+    index = _STATIC_DIR / "index.html"
+    if index.exists():
+        return FileResponse(index)
 
-# Static assets (CSS, JS, etc.) — mounted after all explicit routes.
-app.mount("/", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+    return HTMLResponse(
+        "Frontend not built. Run: <code>cd frontend && npm install && npm run build</code>",
+        status_code=503,
+    )

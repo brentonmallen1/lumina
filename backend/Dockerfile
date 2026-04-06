@@ -1,3 +1,18 @@
+# ── Stage 1: Build React frontend ────────────────────────────────────────────
+FROM node:20-slim AS node-builder
+
+WORKDIR /repo/frontend
+
+# Install dependencies in a cached layer (only re-runs when manifests change)
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install --prefer-offline
+
+# Copy source and build
+# vite.config.ts sets outDir: '../backend/static', which resolves to /repo/backend/static
+COPY frontend/ ./
+RUN npm run build
+
+# ── Stage 2: Python / CUDA runtime ───────────────────────────────────────────
 FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -17,7 +32,7 @@ RUN tar -xf /tmp/ffmpeg.tar.xz -C /tmp && \
 # Install uv from official distroless image
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-# Install Python 3.13 via uv and create project virtualenv
+# Install Python 3.12 via uv and create project virtualenv
 WORKDIR /app
 RUN uv python install 3.12
 RUN uv venv --python 3.12 /app/.venv
@@ -35,7 +50,7 @@ RUN uv pip install \
 # ── Install project dependencies ─────────────────────────────────────────────
 # Copy pyproject.toml and uv.lock before source files so this layer is only
 # invalidated when dependencies change, not on every code edit.
-COPY pyproject.toml uv.lock ./
+COPY backend/pyproject.toml backend/uv.lock ./
 
 # TRANSCRIPTION_ENGINE=canary requires NeMo (heavy). Skip it otherwise.
 ARG INSTALL_CANARY=false
@@ -46,9 +61,12 @@ RUN if [ "$INSTALL_CANARY" = "true" ]; then \
     fi
 
 # ── Application source ────────────────────────────────────────────────────────
-COPY . .
+COPY backend/ .
 
-RUN chmod +x entrypoint.sh && mkdir -p /models/hf /models/whisper /cache/audio
+# Copy built React frontend from stage 1
+COPY --from=node-builder /repo/backend/static ./static
+
+RUN chmod +x entrypoint.sh && mkdir -p /models/hf /models/whisper /cache/audio /data
 
 EXPOSE 8000
 

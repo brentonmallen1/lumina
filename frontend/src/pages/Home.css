@@ -1,0 +1,82 @@
+/* ── Page wrapper ─────────────────────────────────────────────────────── */
+.home {
+  padding: 40px 24px 60px;
+}
+
+.home-inner {
+  max-width: 860px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+
+/* ── Hero ─────────────────────────────────────────────────────────────── */
+.home-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.home-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--text);
+  margin: 0;
+}
+
+.home-subtitle {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── Featured card (full width) ───────────────────────────────────────── */
+.home-featured {
+  width: 100%;
+}
+
+/* ── Section ──────────────────────────────────────────────────────────── */
+.home-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.home-section-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── Tool grid ────────────────────────────────────────────────────────── */
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .home {
+    padding: 24px 16px 48px;
+  }
+
+  .home-title {
+    font-size: 1.35rem;
+  }
+
+  .home-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  .home-grid {
+    grid-template-columns: 1fr;
+  }
+}

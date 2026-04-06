@@ -1,0 +1,97 @@
+/* ── Tailwind directives ──────────────────────────────────────────────── */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Global CSS variables ─────────────────────────────────────────────── */
+:root {
+  --bg:           #e6e8ec;
+  --surface:      #eef0f3;
+  --surface-hover:#e0e3e8;
+  --border:       #c8cdd5;
+  --border-hover: #b8bdc5;
+  --border-focus: #6366f1;
+  --text:         #1e2330;
+  --text-muted:   #4d5464;
+  --accent:       #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-text:  #ffffff;
+  --accent-subtle:#e5e5f8;
+  --accent-shadow:rgba(99, 102, 241, 0.3);
+  --danger:       #d93535;
+  --danger-bg:    #f0e4e4;
+  --danger-border:#d9b0b0;
+  --danger-text:  #a01818;
+  --success:      #1a9e4a;
+  --radius:       12px;
+  --radius-sm:    8px;
+  --shadow:       0 1px 3px rgba(30, 35, 48, 0.06), 0 4px 16px rgba(30, 35, 48, 0.06);
+  --shadow-hover: 0 2px 8px rgba(30, 35, 48, 0.08), 0 8px 24px rgba(30, 35, 48, 0.08);
+  --focus-ring:   0 0 0 3px rgba(99, 102, 241, 0.4);
+}
+
+[data-theme="dark"] {
+  --bg:           #1a1c22;
+  --surface:      #22252e;
+  --surface-hover:#2a2d38;
+  --border:       #383d4a;
+  --border-hover: #454c5c;
+  --border-focus: #818cf8;
+  --text:         #e8eaf0;
+  --text-muted:   #9098aa;
+  --accent:       #818cf8;
+  --accent-hover: #6366f1;
+  --accent-subtle:rgba(99, 102, 241, 0.15);
+  --danger:       #f87171;
+  --danger-bg:    rgba(239, 68, 68, 0.1);
+  --danger-border:rgba(239, 68, 68, 0.3);
+  --danger-text:  #fca5a5;
+}
+
+/* ── Base reset ───────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Focus styles ─────────────────────────────────────────────────────── */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}

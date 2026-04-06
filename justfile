@@ -3,7 +3,7 @@
 #
 # Usage:
 #   just           — list all recipes
-#   just dev       — run dev server locally
+#   just dev       — run full dev stack (API + UI) in parallel
 #   just up        — start via Docker (reads .env)
 
 set dotenv-load  # auto-load .env from project root
@@ -26,6 +26,7 @@ default:
 check:
     @echo "── Tool check ──────────────────────────────────"
     @command -v uv       >/dev/null && echo "  uv:      $(uv --version)" || echo "  uv:      MISSING  →  https://docs.astral.sh/uv/getting-started/installation"
+    @command -v node     >/dev/null && echo "  node:    $(node --version)" || echo "  node:    MISSING  →  https://nodejs.org"
     @command -v docker   >/dev/null && echo "  docker:  $(docker --version)" || echo "  docker:  MISSING"
     @command -v just     >/dev/null && echo "  just:    $(just --version)" || echo "  just:    MISSING  →  https://github.com/casey/just"
     @command -v ffmpeg   >/dev/null && echo "  ffmpeg:  ok" || echo "  ffmpeg:  missing (required for local dev, bundled in Docker)"
@@ -39,12 +40,18 @@ check:
     @echo "  GPU:     ${ENABLE_GPU:-false}"
     @echo "  PORT:    ${APP_PORT:-8080}"
 
-# Install Python 3.13 and sync all deps into backend/.venv
-install:
-    cd backend && uv sync
+# Install all dependencies — Python backend + Node frontend (recommended for first setup)
+install: _install-python install-ui
     @echo ""
-    @echo "Done. To activate locally:"
-    @echo "  source backend/.venv/bin/activate"
+    @echo "Done. Run \`just dev\` to start the dev servers."
+
+# Install only Python deps into backend/.venv
+_install-python:
+    cd backend && uv sync
+
+# Install frontend npm dependencies
+install-ui:
+    cd frontend && npm install
 
 # ── Local Development ─────────────────────────────────────────────────────────
 
@@ -52,14 +59,50 @@ install:
 download:
     cd backend && uv run python download_models.py
 
-# Run the dev server locally with hot-reload (uses env vars from .env).
-# Downloads the model first (mirrors entrypoint.sh) so uvicorn's file watcher
-# doesn't restart the server mid-download and loop forever.
-dev: download
-    cd backend && uv run uvicorn main:app \
+# Run only the API server with hot-reload (no model pre-download — use when model already cached)
+# Uses `python -m uvicorn` so reload subprocesses inherit the correct venv Python.
+dev-api:
+    cd backend && uv run python -m uvicorn main:app \
         --reload \
         --reload-exclude '.venv' \
         --reload-exclude 'cache' \
+        --reload-exclude 'static' \
+        --reload-exclude '*.pyc' \
+        --reload-exclude '__pycache__' \
+        --log-level warning \
+        --port "${APP_PORT:-8080}"
+
+# Run only the Vite dev server (proxies /api to API server).
+# Auto-installs npm deps if node_modules is missing.
+dev-ui:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d frontend/node_modules ]; then
+        echo "node_modules not found — running npm install..."
+        cd frontend && npm install
+    fi
+    cd frontend && npm run dev
+
+# Build the React frontend into backend/static/
+build-ui:
+    cd frontend && npm run build
+
+# Run the full dev stack: API server + Vite dev server in parallel.
+# Use this for active frontend work. Open http://localhost:5173 (Vite proxies /api).
+dev:
+    @echo "Starting API server on :${APP_PORT:-8080} and Vite dev server on :5173"
+    @trap 'kill 0' EXIT; \
+        just dev-api & \
+        just dev-ui & \
+        wait
+
+# Run API server with model pre-download (mirrors Docker entrypoint — use for backend-only work)
+dev-backend: download
+    cd backend && uv run python -m uvicorn main:app \
+        --reload \
+        --reload-exclude '.venv' \
+        --reload-exclude 'cache' \
+        --reload-exclude 'static' \
         --reload-exclude '*.pyc' \
         --reload-exclude '__pycache__' \
         --log-level warning \
@@ -67,7 +110,7 @@ dev: download
 
 # Run dev server without hot-reload (quieter, no watchfiles)
 dev-no-reload: download
-    cd backend && uv run uvicorn main:app \
+    cd backend && uv run python -m uvicorn main:app \
         --port "${APP_PORT:-8080}"
 
 # ── Docker: Build ─────────────────────────────────────────────────────────────
@@ -86,7 +129,7 @@ rebuild:
 up:
     docker compose {{ _compose_files }} up --build -d
     @echo ""
-    @echo "Whisper GUI running at http://localhost:${APP_PORT:-8080}"
+    @echo "Distill running at http://localhost:${APP_PORT:-8080}"
     @echo "  just logs   — tail logs"
     @echo "  just down   — stop"
 
@@ -176,13 +219,14 @@ release:
     echo "  Registry: ${registry}"
     echo "═══════════════════════════════════════════════════════════════"
 
-    # Build for linux/amd64 and push
+    # Build for linux/amd64 and push (context is repo root, Dockerfile in backend/)
     docker buildx build \
         --platform linux/amd64 \
+        --file backend/Dockerfile \
         --tag "${registry}:${version}" \
         --tag "${registry}:latest" \
         --push \
-        ./backend
+        .
 
     # Tag the commit
     git tag -a "v${version}" -m "Release v${version}"
@@ -213,11 +257,12 @@ release-canary:
     # Build for linux/amd64 with canary support and push
     docker buildx build \
         --platform linux/amd64 \
+        --file backend/Dockerfile \
         --build-arg INSTALL_CANARY=true \
         --tag "${registry}:${version}-canary" \
         --tag "${registry}:canary" \
         --push \
-        ./backend
+        .
 
     echo ""
     echo "✓ Pushed ${registry}:${version}-canary"

@@ -1,0 +1,429 @@
+import { useState, useEffect, useCallback } from 'react';
+import { ArrowLeft, Save, RefreshCw, AlertTriangle, Check } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import * as api from '../api/client';
+import type { Settings as SettingsType } from '../types';
+import './Settings.css';
+
+type Section = 'transcription' | 'application' | 'security' | 'ollama';
+
+const ENGINE_OPTIONS = [
+  { value: 'faster-whisper', label: 'Faster Whisper (recommended)' },
+  { value: 'whisper',        label: 'OpenAI Whisper' },
+  { value: 'canary',         label: 'NVIDIA Canary (GPU only)' },
+  { value: 'qwen-audio',     label: 'Qwen Audio (GPU only)' },
+];
+
+const MODEL_OPTIONS = [
+  { value: 'tiny',           label: 'Tiny — fastest, lowest accuracy' },
+  { value: 'base',           label: 'Base' },
+  { value: 'small',          label: 'Small — good CPU option' },
+  { value: 'medium',         label: 'Medium' },
+  { value: 'large-v3',       label: 'Large v3 — best accuracy' },
+  { value: 'large-v3-turbo', label: 'Large v3 Turbo — recommended for GPU' },
+];
+
+const COMPUTE_OPTIONS = [
+  { value: 'int8',         label: 'int8 — fastest, good for CPU' },
+  { value: 'int8_float16', label: 'int8_float16 — balanced (GPU)' },
+  { value: 'float16',      label: 'float16 — best accuracy (GPU)' },
+  { value: 'float32',      label: 'float32 — full precision' },
+];
+
+export default function Settings() {
+  const [section, setSection]             = useState<Section>('transcription');
+  const [settings, setSettings]           = useState<SettingsType | null>(null);
+  const [draft, setDraft]                 = useState<Partial<SettingsType>>({});
+  const [loading, setLoading]             = useState(true);
+  const [saving, setSaving]               = useState(false);
+  const [saved, setSaved]                 = useState(false);
+  const [restartRequired, setRestartRequired] = useState(false);
+  const [restarting, setRestarting]       = useState(false);
+  const [error, setError]                 = useState('');
+
+  const loadSettings = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.getSettings();
+      setSettings(data);
+      setDraft(data);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadSettings(); }, [loadSettings]);
+
+  const set = (key: keyof SettingsType, value: string) => {
+    setDraft(d => ({ ...d, [key]: value }));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const res = await api.updateSettings(draft as Partial<SettingsType>);
+      setSettings(res.settings);
+      setDraft(res.settings);
+      setRestartRequired(res.restart_required);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    setRestarting(true);
+    try {
+      await api.reloadEngine();
+      setRestartRequired(false);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRestarting(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="settings-page">
+        <div className="settings-inner">
+          <p className="settings-loading">Loading settings…</p>
+        </div>
+      </div>
+    );
+  }
+
+  const d = draft as SettingsType;
+
+  return (
+    <div className="settings-page">
+      <div className="settings-inner">
+
+        {/* Back link */}
+        <Link to="/" className="settings-back">
+          <ArrowLeft size={15} aria-hidden="true" />
+          All tools
+        </Link>
+
+        <h1 className="settings-title">Settings</h1>
+
+        {error && (
+          <div className="settings-banner settings-banner--error">
+            <AlertTriangle size={16} aria-hidden="true" />
+            {error}
+          </div>
+        )}
+
+        {restartRequired && (
+          <div className="settings-banner settings-banner--warn">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span>Engine settings changed — restart required for changes to take effect.</span>
+            <button
+              className="settings-restart-btn"
+              onClick={handleRestart}
+              disabled={restarting}
+            >
+              <RefreshCw size={14} className={restarting ? 'spinning' : ''} aria-hidden="true" />
+              {restarting ? 'Restarting…' : 'Restart Engine'}
+            </button>
+          </div>
+        )}
+
+        <div className="settings-layout">
+          {/* Sidebar */}
+          <nav className="settings-sidebar" aria-label="Settings sections">
+            {(
+              [
+                ['transcription', 'Transcription'],
+                ['ollama',        'Ollama (AI)'],
+                ['application',  'Application'],
+                ['security',     'Security'],
+              ] as [Section, string][]
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                className={`settings-nav-item ${section === key ? 'active' : ''} ${key === 'ollama' ? 'soon' : ''}`}
+                onClick={() => setSection(key)}
+              >
+                {label}
+                {key === 'ollama' && <span className="settings-soon-badge">Phase 2</span>}
+              </button>
+            ))}
+          </nav>
+
+          {/* Content */}
+          <div className="settings-content">
+
+            {/* ── Transcription ──────────────────────────────────────── */}
+            {section === 'transcription' && (
+              <div className="settings-section">
+                <div className="settings-section-header">
+                  <h2 className="settings-section-title">Transcription Engine</h2>
+                  <p className="settings-section-desc">
+                    Changes to engine settings require a restart to take effect.
+                  </p>
+                </div>
+
+                <div className="settings-fields">
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="engine">Engine</label>
+                    <select
+                      id="engine"
+                      className="settings-select"
+                      value={d.transcription_engine ?? ''}
+                      onChange={e => set('transcription_engine', e.target.value)}
+                    >
+                      {ENGINE_OPTIONS.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {['faster-whisper', 'whisper'].includes(d.transcription_engine) && (
+                    <div className="settings-field">
+                      <label className="settings-label" htmlFor="model">Model Size</label>
+                      <select
+                        id="model"
+                        className="settings-select"
+                        value={d.whisper_model_size ?? ''}
+                        onChange={e => set('whisper_model_size', e.target.value)}
+                      >
+                        {MODEL_OPTIONS.map(o => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {d.transcription_engine === 'faster-whisper' && (
+                    <div className="settings-field">
+                      <label className="settings-label" htmlFor="compute">Compute Type</label>
+                      <select
+                        id="compute"
+                        className="settings-select"
+                        value={d.compute_type ?? ''}
+                        onChange={e => set('compute_type', e.target.value)}
+                      >
+                        {COMPUTE_OPTIONS.map(o => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="language">
+                      Language
+                      <span className="settings-label-hint">ISO 639-1 code — leave blank for auto-detect</span>
+                    </label>
+                    <input
+                      id="language"
+                      type="text"
+                      className="settings-input"
+                      value={d.language ?? ''}
+                      onChange={e => set('language', e.target.value)}
+                      placeholder="e.g. en, es, fr — blank = auto"
+                      maxLength={10}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Ollama (Phase 2) ───────────────────────────────────── */}
+            {section === 'ollama' && (
+              <div className="settings-section">
+                <div className="settings-section-header">
+                  <h2 className="settings-section-title">Ollama</h2>
+                  <p className="settings-section-desc">
+                    AI summarization via a local Ollama instance. Coming in Phase 2.
+                  </p>
+                </div>
+                <div className="settings-fields">
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="ollama-url">Ollama URL</label>
+                    <input
+                      id="ollama-url"
+                      type="url"
+                      className="settings-input"
+                      value={d.ollama_url ?? ''}
+                      onChange={e => set('ollama_url', e.target.value)}
+                      placeholder="http://localhost:11434"
+                    />
+                  </div>
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="ollama-model">
+                      Model
+                      <span className="settings-label-hint">Auto-populated from Ollama in Phase 2</span>
+                    </label>
+                    <input
+                      id="ollama-model"
+                      type="text"
+                      className="settings-input"
+                      value={d.ollama_model ?? ''}
+                      onChange={e => set('ollama_model', e.target.value)}
+                      placeholder="e.g. llama3.2"
+                    />
+                  </div>
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="ollama-timeout">Timeout (seconds)</label>
+                    <input
+                      id="ollama-timeout"
+                      type="number"
+                      className="settings-input settings-input--narrow"
+                      value={d.ollama_timeout ?? '120'}
+                      onChange={e => set('ollama_timeout', e.target.value)}
+                      min="10"
+                      max="600"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Application ────────────────────────────────────────── */}
+            {section === 'application' && (
+              <div className="settings-section">
+                <div className="settings-section-header">
+                  <h2 className="settings-section-title">Application</h2>
+                  <p className="settings-section-desc">
+                    Upload limits and cache behaviour. Changes take effect immediately.
+                  </p>
+                </div>
+
+                <div className="settings-fields">
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="max-upload">
+                      Max Upload Size (MB)
+                      <span className="settings-label-hint">Set to 0 for unlimited</span>
+                    </label>
+                    <input
+                      id="max-upload"
+                      type="number"
+                      className="settings-input settings-input--narrow"
+                      value={d.max_upload_size_mb ?? '500'}
+                      onChange={e => set('max_upload_size_mb', e.target.value)}
+                      min="0"
+                    />
+                  </div>
+
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="cache-ttl">
+                      Audio Cache TTL (hours)
+                      <span className="settings-label-hint">How long to keep uploaded files. 0 = never purge</span>
+                    </label>
+                    <input
+                      id="cache-ttl"
+                      type="number"
+                      className="settings-input settings-input--narrow"
+                      value={d.audio_cache_ttl_hours ?? '72'}
+                      onChange={e => set('audio_cache_ttl_hours', e.target.value)}
+                      min="0"
+                    />
+                  </div>
+
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="app-name">App Name</label>
+                    <input
+                      id="app-name"
+                      type="text"
+                      className="settings-input"
+                      value={d.app_name ?? ''}
+                      onChange={e => set('app_name', e.target.value)}
+                      placeholder="Distill"
+                      maxLength={40}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Security ───────────────────────────────────────────── */}
+            {section === 'security' && (
+              <div className="settings-section">
+                <div className="settings-section-header">
+                  <h2 className="settings-section-title">Security</h2>
+                  <p className="settings-section-desc">
+                    HTTP Basic Auth for all endpoints. Enable if exposing to a network.
+                  </p>
+                </div>
+
+                <div className="settings-fields">
+                  <div className="settings-field">
+                    <div className="settings-toggle-row">
+                      <div>
+                        <p className="settings-label" style={{ marginBottom: 2 }}>Enable Authentication</p>
+                        <p className="settings-label-hint" style={{ margin: 0 }}>
+                          Protects all API and UI endpoints with Basic Auth
+                        </p>
+                      </div>
+                      <button
+                        className={`settings-toggle ${d.auth_enabled === 'true' ? 'on' : ''}`}
+                        role="switch"
+                        aria-checked={d.auth_enabled === 'true'}
+                        onClick={() => set('auth_enabled', d.auth_enabled === 'true' ? 'false' : 'true')}
+                      >
+                        <span className="settings-toggle-thumb" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {d.auth_enabled === 'true' && (
+                    <>
+                      <div className="settings-field">
+                        <label className="settings-label" htmlFor="auth-user">Username</label>
+                        <input
+                          id="auth-user"
+                          type="text"
+                          className="settings-input"
+                          value={d.auth_username ?? ''}
+                          onChange={e => set('auth_username', e.target.value)}
+                          autoComplete="username"
+                        />
+                      </div>
+                      <div className="settings-field">
+                        <label className="settings-label" htmlFor="auth-pass">Password</label>
+                        <input
+                          id="auth-pass"
+                          type="password"
+                          className="settings-input"
+                          value={d.auth_password ?? ''}
+                          onChange={e => set('auth_password', e.target.value)}
+                          autoComplete="new-password"
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Save bar */}
+            <div className="settings-save-bar">
+              <button
+                className="settings-save-btn"
+                onClick={handleSave}
+                disabled={saving || JSON.stringify(draft) === JSON.stringify(settings)}
+              >
+                {saving ? (
+                  <><RefreshCw size={15} className="spinning" aria-hidden="true" /> Saving…</>
+                ) : saved ? (
+                  <><Check size={15} aria-hidden="true" /> Saved</>
+                ) : (
+                  <><Save size={15} aria-hidden="true" /> Save Changes</>
+                )}
+              </button>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

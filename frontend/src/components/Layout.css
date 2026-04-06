@@ -1,0 +1,90 @@
+/* ── Layout shell ─────────────────────────────────────────────────────── */
+.layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+/* ── Header ───────────────────────────────────────────────────────────── */
+.layout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  height: 56px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  flex-shrink: 0;
+}
+
+/* ── Brand / logo ─────────────────────────────────────────────────────── */
+.layout-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  margin-left: -8px;
+  transition: background 0.15s ease;
+}
+
+.layout-brand:hover {
+  background: var(--surface-hover);
+}
+
+.layout-brand-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.layout-brand-name {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+/* ── Nav ──────────────────────────────────────────────────────────────── */
+.layout-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.layout-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.layout-nav-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.layout-nav-btn.active {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+/* ── Main content ─────────────────────────────────────────────────────── */
+.layout-main {
+  flex: 1;
+  width: 100%;
+}
