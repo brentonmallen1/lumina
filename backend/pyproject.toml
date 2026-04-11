@@ -29,6 +29,8 @@ dependencies = [
     # RSS/podcast monitoring
     "feedparser>=6.0",
     "apscheduler>=3.10",
+    # Text-to-Speech
+    "kokoro>=0.9",
 ]
 
 [project.optional-dependencies]

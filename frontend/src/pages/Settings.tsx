@@ -2,10 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, Save, RefreshCw, AlertTriangle, Check, Wifi, WifiOff, Loader, Download } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import * as api from '../api/client';
-import type { AudioModelMap, Capabilities, OllamaModel, Settings as SettingsType } from '../types';
+import type { AudioModelMap, Capabilities, OllamaModel, Settings as SettingsType, TTSStatus, TTSVoiceMap } from '../types';
 import './Settings.css';
 
-type Section = 'transcription' | 'application' | 'security' | 'ollama' | 'enhancement';
+type Section = 'transcription' | 'application' | 'security' | 'ollama' | 'enhancement' | 'tts';
 
 const AUDIO_MODELS: { key: string; label: string; description: string }[] = [
   { key: 'deepfilternet', label: 'DeepFilterNet',  description: 'Noise reduction' },
@@ -62,6 +62,13 @@ export default function Settings() {
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [downloadMsg, setDownloadMsg]         = useState<Record<string, string>>({});
 
+  // TTS
+  const [ttsStatus, setTtsStatus]             = useState<TTSStatus | null>(null);
+  const [ttsVoices, setTtsVoices]             = useState<TTSVoiceMap>({});
+  const [ttsStatusLoading, setTtsStatusLoading] = useState(false);
+  const [downloadingTts, setDownloadingTts]   = useState(false);
+  const [ttsDownloadMsg, setTtsDownloadMsg]   = useState('');
+
   const loadSettings = useCallback(async () => {
     setLoading(true);
     try {
@@ -108,6 +115,45 @@ export default function Settings() {
   useEffect(() => {
     if (section === 'enhancement') loadAudioModels();
   }, [section, loadAudioModels]);
+
+  const loadTtsStatus = useCallback(async () => {
+    setTtsStatusLoading(true);
+    try {
+      const [status, { voices }] = await Promise.all([
+        api.getTTSStatus(),
+        api.getTTSVoices(),
+      ]);
+      setTtsStatus(status);
+      setTtsVoices(voices);
+    } catch {
+      setTtsStatus(null);
+    } finally {
+      setTtsStatusLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (section === 'tts') loadTtsStatus();
+  }, [section, loadTtsStatus]);
+
+  const handleDownloadTts = async () => {
+    setDownloadingTts(true);
+    setTtsDownloadMsg('Starting download…');
+    await api.downloadTTSModel(
+      (status, message) => {
+        setTtsDownloadMsg(status === 'downloading' ? (message || 'Downloading…') : message);
+      },
+      async () => {
+        setDownloadingTts(false);
+        setTtsDownloadMsg('');
+        await loadTtsStatus();
+      },
+      (err) => {
+        setTtsDownloadMsg(`Error: ${err}`);
+        setDownloadingTts(false);
+      },
+    );
+  };
 
   const handleDownloadModel = async (modelKey: string) => {
     setDownloadingModel(modelKey);
@@ -228,6 +274,7 @@ export default function Settings() {
                 ['transcription', 'Transcription'],
                 ['ollama',        'Ollama (AI)'],
                 ['enhancement',  'Enhancement'],
+                ['tts',           'Text-to-Speech'],
                 ['application',  'Application'],
                 ['security',     'Security'],
               ] as [Section, string][]
@@ -558,6 +605,125 @@ export default function Settings() {
                             </div>
                           );
                         })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Text-to-Speech ─────────────────────────────────────── */}
+            {section === 'tts' && (
+              <div className="settings-section">
+                <div className="settings-section-header">
+                  <h2 className="settings-section-title">Text-to-Speech</h2>
+                  <p className="settings-section-desc">
+                    Read summarization results aloud using Kokoro TTS (82M parameters, English voices).
+                  </p>
+                </div>
+
+                <div className="settings-fields">
+                  {/* Enable toggle */}
+                  <div className="settings-field">
+                    <div className="settings-toggle-row">
+                      <div>
+                        <p className="settings-label" style={{ marginBottom: 2 }}>Enable Read Aloud</p>
+                        <p className="settings-label-hint" style={{ margin: 0 }}>Show Read Aloud button on summarization results</p>
+                      </div>
+                      <button
+                        className={`settings-toggle ${d.tts_enabled !== 'false' ? 'on' : ''}`}
+                        role="switch"
+                        aria-checked={d.tts_enabled !== 'false'}
+                        onClick={() => set('tts_enabled', d.tts_enabled === 'false' ? 'true' : 'false')}
+                      >
+                        <span className="settings-toggle-thumb" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Voice selection */}
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="tts-voice">
+                      Default Voice
+                      <span className="settings-label-hint">Voice used when reading results aloud</span>
+                    </label>
+                    <select
+                      id="tts-voice"
+                      className="settings-select"
+                      value={d.tts_voice ?? 'af_bella'}
+                      onChange={e => set('tts_voice', e.target.value)}
+                    >
+                      {Object.keys(ttsVoices).length > 0 ? (
+                        <>
+                          <optgroup label="American Female">
+                            {Object.entries(ttsVoices).filter(([k]) => k.startsWith('af_')).map(([k, v]) => (
+                              <option key={k} value={k}>{v.name}</option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="American Male">
+                            {Object.entries(ttsVoices).filter(([k]) => k.startsWith('am_')).map(([k, v]) => (
+                              <option key={k} value={k}>{v.name}</option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="British Female">
+                            {Object.entries(ttsVoices).filter(([k]) => k.startsWith('bf_')).map(([k, v]) => (
+                              <option key={k} value={k}>{v.name}</option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="British Male">
+                            {Object.entries(ttsVoices).filter(([k]) => k.startsWith('bm_')).map(([k, v]) => (
+                              <option key={k} value={k}>{v.name}</option>
+                            ))}
+                          </optgroup>
+                        </>
+                      ) : (
+                        <option value={d.tts_voice ?? 'af_bella'}>{d.tts_voice ?? 'af_bella'}</option>
+                      )}
+                    </select>
+                  </div>
+
+                  {/* Model status */}
+                  <div className="settings-field">
+                    <p className="settings-label">TTS Model</p>
+                    <p className="settings-label-hint" style={{ marginBottom: 8 }}>
+                      Kokoro-82M is downloaded on first use, or pre-download below.
+                    </p>
+                    {ttsStatusLoading && <p className="settings-label-hint">Loading model status…</p>}
+                    {!ttsStatusLoading && (
+                      <div className="settings-model-cards">
+                        <div className="settings-model-card">
+                          <div className="settings-model-info">
+                            <span className="settings-model-name">Kokoro-82M</span>
+                            <span className="settings-model-desc">Neural TTS, 48 English voices</span>
+                          </div>
+                          <div className="settings-model-status">
+                            {!ttsStatus?.package ? (
+                              <span className="settings-model-badge settings-model-badge--missing">not installed</span>
+                            ) : ttsStatus.weights ? (
+                              <span className="settings-model-badge settings-model-badge--ok">
+                                <Check size={11} aria-hidden="true" /> ready
+                              </span>
+                            ) : (
+                              <span className="settings-model-badge settings-model-badge--warn">weights missing</span>
+                            )}
+                          </div>
+                          {ttsStatus?.package && !ttsStatus.weights && (
+                            <button
+                              className="settings-download-btn"
+                              onClick={handleDownloadTts}
+                              disabled={downloadingTts}
+                              type="button"
+                            >
+                              {downloadingTts
+                                ? <Loader size={13} className="spinning" aria-hidden="true" />
+                                : <Download size={13} aria-hidden="true" />}
+                              {downloadingTts ? (ttsDownloadMsg || 'Downloading…') : 'Download'}
+                            </button>
+                          )}
+                          {downloadingTts && ttsDownloadMsg && (
+                            <p className="settings-model-msg">{ttsDownloadMsg}</p>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>

@@ -68,6 +68,22 @@ export interface Settings {
   enhance_upsample: string;
   // External integrations
   hf_token: string;
+  // Text-to-Speech
+  tts_enabled: string;
+  tts_voice: string;
+}
+
+export interface TTSVoice {
+  name: string;
+  gender: 'male' | 'female';
+  accent: 'american' | 'british';
+}
+
+export type TTSVoiceMap = Record<string, TTSVoice>;
+
+export interface TTSStatus {
+  package: boolean;
+  weights: boolean;
 }
 
 export interface EngineCapability {

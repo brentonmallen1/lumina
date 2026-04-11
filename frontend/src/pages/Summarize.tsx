@@ -10,6 +10,7 @@ import * as api from '../api/client';
 import type { AudioModelMap, ChatMessage, EnhancementOptions } from '../types';
 import EnhancementPanel, { DEFAULT_ENHANCEMENT } from '../components/EnhancementPanel';
 import MindMapDiagram from '../components/MindMapDiagram';
+import TTSPlayer from '../components/TTSPlayer';
 import { useSourceCache } from '../context/SourceCache';
 import './Summarize.css';
 
@@ -169,6 +170,8 @@ export default function Summarize() {
   const [preferCaptions, setPreferCaptions] = useState(true);
   const [enhancement,    setEnhancement]    = useState<EnhancementOptions>(DEFAULT_ENHANCEMENT);
   const [audioModels,    setAudioModels]    = useState<AudioModelMap | undefined>(undefined);
+  const [ttsEnabled,     setTtsEnabled]     = useState(true);
+  const [ttsVoice,       setTtsVoice]       = useState<string | undefined>(undefined);
 
   // ── Translation state ─────────────────────────────────────────────────────
   const [translateLang,   setTranslateLang]   = useState('Spanish');
@@ -197,9 +200,13 @@ export default function Summarize() {
   const rawBufferRef  = useRef('');
   const thinkDoneRef  = useRef(false);
 
-  // Load audio model status and prompt modes on mount
+  // Load audio model status, TTS settings, and prompt modes on mount
   useEffect(() => {
     api.getAudioModels().then(setAudioModels).catch(() => {});
+    api.getSettings().then(s => {
+      setTtsEnabled(s.tts_enabled !== 'false');
+      setTtsVoice(s.tts_voice || undefined);
+    }).catch(() => {});
     api.getPrompts().then(prompts => {
       // Deduplicate by mode: custom prompts shadow built-ins for the same mode slug
       const seen = new Map<string, { id: string; label: string; hint: string }>();
@@ -782,6 +789,9 @@ export default function Summarize() {
                     <Copy size={14} aria-hidden="true" />
                     {isCopied ? 'Copied!' : 'Copy'}
                   </button>
+                  {ttsEnabled && (
+                    <TTSPlayer text={result} voice={ttsVoice} />
+                  )}
                   {mode === 'mind_map' && !renderMarkdown && (
                     <button className="summarize-action-btn" onClick={downloadSvg}>
                       <Download size={14} aria-hidden="true" />
@@ -893,6 +903,11 @@ export default function Summarize() {
                   <div className="summarize-translate-result">
                     {translation}
                     {translateState === 'streaming' && <span className="summarize-cursor" aria-hidden="true" />}
+                  </div>
+                )}
+                {ttsEnabled && translateState === 'done' && translation && (
+                  <div className="summarize-translate-tts">
+                    <TTSPlayer text={translation} voice={ttsVoice} />
                   </div>
                 )}
               </div>

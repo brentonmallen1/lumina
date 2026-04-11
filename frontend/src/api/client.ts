@@ -1,4 +1,4 @@
-import type { AppInfo, AudioModelMap, Capabilities, ChatMessage, EnhancementOptions, Feed, FeedEntry, FileMeta, HistoryEntry, Job, OllamaModel, PipelineSession, Prompt, Settings, SettingsUpdateResponse, YouTubeDownloadJob, YouTubeVideoInfo } from '../types';
+import type { AppInfo, AudioModelMap, Capabilities, ChatMessage, EnhancementOptions, Feed, FeedEntry, FileMeta, HistoryEntry, Job, OllamaModel, PipelineSession, Prompt, Settings, SettingsUpdateResponse, TTSStatus, TTSVoiceMap, YouTubeDownloadJob, YouTubeVideoInfo } from '../types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
@@ -443,6 +443,84 @@ export async function downloadAudioModels(
     reader.releaseLock();
   }
   onDone();
+}
+
+// ── Text-to-Speech ─────────────────────────────────────────────────────────
+
+export function getTTSStatus(): Promise<TTSStatus> {
+  return request<TTSStatus>('/api/tts/status');
+}
+
+export function getTTSVoices(): Promise<{ voices: TTSVoiceMap }> {
+  return request<{ voices: TTSVoiceMap }>('/api/tts/voices');
+}
+
+/**
+ * Download Kokoro TTS model weights.
+ * Streams SSE events:
+ *   {"status": "downloading"|"done"|"error", "message": "...", "error": "..."}
+ *   [DONE]
+ */
+export async function downloadTTSModel(
+  onProgress: (status: string, message: string) => void,
+  onDone: () => void,
+  onError: (message: string) => void,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch('/api/tts/download', { method: 'POST' });
+  } catch {
+    onError('Network error — is the API server running?');
+    return;
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    onError(body.detail ?? res.statusText);
+    return;
+  }
+
+  const reader  = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') { onDone(); return; }
+        try {
+          const ev = JSON.parse(payload);
+          if (ev.error)   { onError(ev.error); return; }
+          if (ev.status)  { onProgress(ev.status, ev.message ?? ''); }
+        } catch { /* skip */ }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  onDone();
+}
+
+/**
+ * Synthesize text to speech and return an audio Blob (WAV).
+ * Pass voice=undefined to use the server's default voice setting.
+ */
+export async function synthesizeSpeech(text: string, voice?: string): Promise<Blob> {
+  const res = await fetch('/api/tts/synthesize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(body.detail ?? res.statusText);
+  }
+  return res.blob();
 }
 
 // ── Shared SSE consumer ────────────────────────────────────────────────────

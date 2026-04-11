@@ -51,6 +51,9 @@ _DEFAULTS: dict[str, str] = {
     "enhance_upsample":  os.getenv("ENHANCE_UPSAMPLE",  "false"),
     # External integrations
     "hf_token":          os.getenv("HF_TOKEN", ""),
+    # Text-to-Speech
+    "tts_enabled":       os.getenv("TTS_ENABLED", "true"),
+    "tts_voice":         os.getenv("TTS_VOICE", "af_bella"),
 }
 
 

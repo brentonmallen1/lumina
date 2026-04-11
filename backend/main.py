@@ -671,6 +671,71 @@ async def download_audio_models(req: DownloadModelsRequest, _: bool = Depends(ve
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
+# ── Text-to-Speech ────────────────────────────────────────────────────────
+
+from tts import TTSEngine, get_tts_status, download_tts_model, VOICES
+
+
+@app.get("/api/tts/status")
+async def tts_status(_: bool = Depends(verify_auth)):
+    """Return TTS package/weights availability."""
+    return get_tts_status()
+
+
+@app.get("/api/tts/voices")
+async def tts_voices(_: bool = Depends(verify_auth)):
+    """Return available voices with metadata."""
+    return {"voices": VOICES}
+
+
+@app.post("/api/tts/download")
+async def tts_download(_: bool = Depends(verify_auth)):
+    """
+    Download Kokoro TTS model weights.
+    Streams SSE progress events.
+
+    Events:
+      {"status": "downloading", "message": "..."}
+      {"status": "done",        "message": "..."}
+      {"status": "error",       "error":   "..."}
+      [DONE]
+    """
+    async def event_stream():
+        yield f"data: {json.dumps({'status': 'downloading', 'message': 'Downloading Kokoro TTS model\u2026'})}\n\n"
+        try:
+            await asyncio.to_thread(download_tts_model)
+            yield f"data: {json.dumps({'status': 'done', 'message': 'Model ready'})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'status': 'error', 'error': str(exc)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+class TTSSynthesizeRequest(BaseModel):
+    text:  str
+    voice: str | None = None  # Falls back to tts_voice setting
+
+
+@app.post("/api/tts/synthesize")
+async def tts_synthesize(req: TTSSynthesizeRequest, _: bool = Depends(verify_auth)):
+    """
+    Synthesize text to speech and return audio/wav.
+    Uses the configured default voice if none is specified.
+    """
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="Text is required")
+
+    voice = req.voice or _settings.get("tts_voice", "af_bella")
+    engine = TTSEngine()
+    try:
+        audio_bytes = await asyncio.to_thread(engine.synthesize, req.text, voice)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    return Response(content=audio_bytes, media_type="audio/wav")
+
+
 # ── Translation ───────────────────────────────────────────────────────────
 
 class TranslateRequest(BaseModel):

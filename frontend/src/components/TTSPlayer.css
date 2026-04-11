@@ -1,0 +1,37 @@
+.tts-player {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tts-loading-btn {
+  opacity: 0.7;
+  cursor: wait !important;
+}
+
+.tts-playing-btn {
+  background: var(--accent-subtle) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+/* Square stop button — icon only, no padding waste */
+.tts-stop-btn {
+  padding: 5px 8px !important;
+}
+
+.tts-error {
+  font-size: 0.78rem;
+  color: var(--danger, #e55);
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+@keyframes tts-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.tts-spin {
+  animation: tts-spin 1s linear infinite;
+}

@@ -769,6 +769,10 @@ details[open] .summarize-reasoning-summary::before {
   white-space: pre-wrap;
 }
 
+.summarize-translate-tts {
+  margin-top: 8px;
+}
+
 .summarize-translate-error {
   font-size: 0.82rem;
   color: var(--danger-text);
