@@ -8,8 +8,9 @@
   <Privileged>false</Privileged>
 
   <Overview>
-    Lumina — audio transcription and summarization tool. Supports multiple engines
-    (faster-whisper, whisper, canary, qwen-audio) with optional GPU acceleration.
+    Lumina — audio transcription, summarization, and text-to-speech tool. Supports multiple
+    transcription engines (faster-whisper, whisper, canary, qwen-audio) with optional GPU
+    acceleration. Requires a running Ollama instance for AI summarization.
   </Overview>
 
   <Category>MediaApp:Music MediaApp:Video Tools:</Category>
@@ -62,6 +63,25 @@
     Display="always"
     Required="true">/mnt/user/appdata/lumina/data</Config>
 
+  <!-- ── Ollama ────────────────────────────────────── -->
+  <Config
+    Name="Ollama URL"
+    Target="OLLAMA_URL"
+    Default="http://localhost:11434"
+    Type="Variable"
+    Display="always"
+    Required="true"
+    Description="URL of your Ollama instance. Required for AI summarization.">http://localhost:11434</Config>
+
+  <Config
+    Name="Ollama Model"
+    Target="OLLAMA_MODEL"
+    Default="llama3.2"
+    Type="Variable"
+    Display="always"
+    Required="true"
+    Description="Ollama model to use for summarization (e.g. llama3.2, mistral, gemma3).">llama3.2</Config>
+
   <!-- ── Engine ─────────────────────────────────────── -->
   <Config
     Name="Transcription Engine"
@@ -106,6 +126,33 @@
     Default="en"
     Type="Variable"
     Display="always">en</Config>
+
+  <!-- ── HuggingFace ───────────────────────────────── -->
+  <Config
+    Name="HuggingFace Token"
+    Target="HF_TOKEN"
+    Default=""
+    Type="Variable"
+    Display="advanced"
+    Mask="true"
+    Description="Optional. Required for speaker diarization (pyannote.audio). Get a token at huggingface.co/settings/tokens."></Config>
+
+  <!-- ── Text to Speech ────────────────────────────── -->
+  <Config
+    Name="TTS Enabled"
+    Target="TTS_ENABLED"
+    Default="true"
+    Type="Variable"
+    Display="always"
+    Description="Enable Kokoro text-to-speech. Download model weights via Settings after first start.">true</Config>
+
+  <Config
+    Name="TTS Default Voice"
+    Target="TTS_VOICE"
+    Default="af_bella"
+    Type="Variable"
+    Display="advanced"
+    Description="Default TTS voice. Options: af_bella, af_nova, af_sarah, am_michael, bm_george, bf_emma, and more. Configure in Settings.">af_bella</Config>
 
   <!-- ── API ───────────────────────────────────────── -->
   <Config

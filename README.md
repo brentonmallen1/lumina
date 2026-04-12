@@ -506,7 +506,7 @@ Model weights are stored in `./volumes/models/` and survive container rebuilds.
 
 ## Unraid
 
-An [Unraid Community Applications](https://unraid.net/community/apps) template is included at [`unraid/whisper-gui.xml`](unraid/whisper-gui.xml). It configures all ports, paths, and environment variables through the Unraid UI.
+An [Unraid Community Applications](https://unraid.net/community/apps) template is included at [`unraid/lumina.xml`](unraid/lumina.xml). It configures all ports, paths, and environment variables through the Unraid UI.
 
 Set the **Repository** field to your registry image (e.g. `registry.example.com/lumina:latest`) and fill in the **API Key** field to secure programmatic access.
 
