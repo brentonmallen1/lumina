@@ -15,6 +15,7 @@ A self-hostable AI content extraction and analysis tool. Point it at audio, vide
 | **Summarize** | Audio, video, YouTube URL, webpage, PDF, image, or text | AI-generated summary, key points, mind map, action items, Q&A, meeting minutes |
 | **Transcribe** | Audio or video file | Full transcript with word-level timestamps, SRT/VTT export |
 | **Audio Enhance** | Any audio file | Noise reduction, vocal isolation, super-resolution, normalization |
+| **Text to Speech** | Any text | High-quality speech synthesis via Kokoro; 28 English voices |
 | **Batch** | Multiple files | All processed and summarized in one queue |
 | **RSS Monitor** | RSS or podcast feed URL | Auto-transcribes new episodes as they arrive |
 | **History** | — | Browse and search past results |
@@ -30,6 +31,7 @@ A self-hostable AI content extraction and analysis tool. Point it at audio, vide
 - **Source caching** — extracted content is cached in-session; switching modes re-runs only the LLM, not the extraction
 - **In-context chat** — after any summarization, chat with the source document using the full extracted text
 - **Translation** — translate any result to another language, streamed
+- **Text to speech** — read any summarization result or translation aloud using Kokoro TTS; persistent audio player survives tab switching
 - **Word-level timestamps** — transcripts include per-word timing for SRT/VTT subtitle export
 - **Speaker diarization** — optional pyannote.audio integration (requires HuggingFace token)
 - **Audio enhancement pipeline** — DeepFilterNet noise reduction, Demucs vocal isolation, LavaSR super-resolution
@@ -78,6 +80,44 @@ Applies to `whisper` and `faster-whisper`.
 |---|---|---|
 | `Qwen/Qwen2.5-Audio-3B-Instruct` | ~8 GB | Default. Good balance of quality and VRAM. |
 | `Qwen/Qwen2.5-Audio-7B-Instruct` | ~16 GB | Higher quality if VRAM allows. |
+
+---
+
+## Text to Speech
+
+Lumina uses [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) (82M parameter neural TTS) for offline, high-quality English speech synthesis.
+
+### Voices
+
+28 English voices across four accent/gender groups:
+
+| Group | Count | Examples |
+|---|---|---|
+| American Female (`af_`) | 11 | Bella, Nova, Sarah, Sky, Alloy, Heart, … |
+| American Male (`am_`) | 9 | Michael, Fenrir, Adam, Santa, … |
+| British Female (`bf_`) | 4 | Emma, Isabella, Alice, Lily |
+| British Male (`bm_`) | 4 | George, Fable, Daniel, Lewis |
+
+### Setup
+
+1. Go to **Settings → Text to Speech**
+2. Click **Download Model** — this downloads the Kokoro weights (~330 MB) and all 28 voice files into `./volumes/models/`
+3. Select a default voice and enable TTS
+
+You can preview any voice from the Settings page using the play button next to the voice selector.
+
+### Using TTS
+
+- **Summarize page** — a **Read Aloud** button appears in the result action bar once a result is available. Click it to generate and play the audio. The audio player renders above the results and persists while you switch between summarization modes or browser tabs.
+- **Translations** — a **Read Aloud** button also appears below any translation result.
+- **TTS page** — a dedicated tool for free-form text synthesis. Paste any text, choose a voice, generate, and download the `.wav`.
+
+### Environment variables
+
+```dotenv
+TTS_ENABLED=true          # Show/hide TTS controls (default: true)
+TTS_VOICE=af_bella        # Default voice (default: af_bella)
+```
 
 ---
 
@@ -347,6 +387,24 @@ curl -X POST http://localhost:8880/api/summarize/url \
 | `GET` | `/api/enhance/{job_id}/original` | Download the original. |
 | `POST` | `/api/reenhance/{job_id}` | Re-run enhancement on a cached file. |
 
+### Text to Speech
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/tts/status` | `{ package, weights }` — whether Kokoro is installed and model is downloaded. |
+| `GET` | `/api/tts/voices` | Map of all available voices with name, gender, and accent. |
+| `GET` | `/api/tts/download` | SSE stream — download Kokoro model weights. Events: `{ progress }` / `[DONE]` / `error`. |
+| `POST` | `/api/tts/synthesize` | Body: `{ text, voice? }`. Returns `audio/wav` binary. |
+
+```bash
+# Synthesize speech
+curl -X POST http://localhost:8880/api/tts/synthesize \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "text": "Hello world", "voice": "af_bella" }' \
+  --output speech.wav
+```
+
 ### System
 
 | Method | Path | Description |
@@ -390,7 +448,7 @@ lumina/
 │   ├── index.html
 │   ├── package.json
 │   └── src/
-│       ├── pages/            # Summarize, Transcribe, Enhance, Batch, Feeds, History, Prompts, Settings
+│       ├── pages/            # Summarize, Transcribe, Enhance, TTS, Batch, Feeds, History, Prompts, Settings
 │       ├── components/       # Layout, ToolCard, MindMapDiagram, EnhancementPanel
 │       ├── api/client.ts     # Typed API client
 │       ├── context/          # SourceCacheContext (cross-tab extraction cache)
@@ -417,10 +475,14 @@ lumina/
     │   ├── webpage.py        # Playwright + readability-lxml
     │   ├── pdf.py            # pdfplumber
     │   └── image.py          # base64 → vision LLM
-    └── llm/
-        ├── client.py         # Ollama streaming client
-        ├── prompts.py        # Built-in prompt templates
-        └── context.py        # Context management for chat
+    ├── llm/
+    │   ├── client.py         # Ollama streaming client
+    │   ├── prompts.py        # Built-in prompt templates
+    │   └── context.py        # Context management for chat
+    └── tts/
+        ├── engine.py         # Kokoro TTSEngine singleton + download helpers
+        ├── voices.py         # 28 English voice definitions
+        └── preprocess.py     # Markdown → speech-friendly plain text
 ```
 
 ---
@@ -436,6 +498,7 @@ lumina/
 | `nvidia/canary-1b` | ~4 GB |
 | `Qwen2.5-Audio-3B` | ~8 GB |
 | `Qwen2.5-Audio-7B` | ~15 GB |
+| Kokoro TTS (model + 28 voices) | ~660 MB |
 
 Model weights are stored in `./volumes/models/` and survive container rebuilds.
 
