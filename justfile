@@ -218,16 +218,27 @@ release:
         exit 1
     fi
 
+    # Abort if there are uncommitted changes
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "Error: uncommitted changes — commit or stash before releasing"
+        exit 1
+    fi
+
     version=$(just _calver)
     echo "═══════════════════════════════════════════════════════════════"
     echo "  Releasing lumina v${version}"
     echo "  Registry: ${registry}"
     echo "═══════════════════════════════════════════════════════════════"
 
-    # Build for linux/amd64 and push (context is repo root, Dockerfile in backend/)
+    # Build for linux/amd64 and push (context is repo root, Dockerfile in backend/).
+    # --provenance=false produces a single-manifest image (required by some registries).
+    # --cache-from/to reuses layers from the previous release to avoid re-downloading.
     docker buildx build \
         --platform linux/amd64 \
         --file backend/Dockerfile \
+        --provenance=false \
+        --cache-from "type=registry,ref=${registry}:buildcache" \
+        --cache-to   "type=registry,ref=${registry}:buildcache,mode=max" \
         --tag "${registry}:${version}" \
         --tag "${registry}:latest" \
         --push \
@@ -253,6 +264,12 @@ release-canary:
         exit 1
     fi
 
+    # Abort if there are uncommitted changes
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "Error: uncommitted changes — commit or stash before releasing"
+        exit 1
+    fi
+
     version=$(just _calver)
     echo "═══════════════════════════════════════════════════════════════"
     echo "  Releasing lumina v${version}-canary"
@@ -264,11 +281,19 @@ release-canary:
         --platform linux/amd64 \
         --file backend/Dockerfile \
         --build-arg INSTALL_CANARY=true \
+        --provenance=false \
+        --cache-from "type=registry,ref=${registry}:buildcache-canary" \
+        --cache-to   "type=registry,ref=${registry}:buildcache-canary,mode=max" \
         --tag "${registry}:${version}-canary" \
         --tag "${registry}:canary" \
         --push \
         .
 
+    # Tag the commit
+    git tag -a "v${version}-canary" -m "Release v${version}-canary"
+    git push origin "v${version}-canary"
+
     echo ""
     echo "✓ Pushed ${registry}:${version}-canary"
     echo "✓ Pushed ${registry}:canary"
+    echo "✓ Tagged v${version}-canary"

@@ -207,9 +207,10 @@ def start(get_feeds_fn=None) -> None:
         if _started:
             return
 
+        import os
         from apscheduler.schedulers.background import BackgroundScheduler
 
-        _scheduler = BackgroundScheduler(daemon=True)
+        _scheduler = BackgroundScheduler(daemon=True, timezone=os.environ.get("TZ", "UTC"))
 
         # Check all feeds every 15 minutes; individual interval enforced in check_feed
         def _poll_all():

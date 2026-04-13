@@ -1,24 +1,58 @@
-# Local dev environment — don't copy into container
-.venv/
-__pycache__/
-*.pyc
-*.pyo
+# ── Python ────────────────────────────────────────────────────────────────────
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
 
-# Cache directories
-cache/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# ── Node / frontend build artefacts ──────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
 
-# Editor/IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+# ── Backend runtime directories ───────────────────────────────────────────────
+# These exist locally but are volume-mounted or regenerated in the container.
+backend/cache/
+backend/data/
+backend/audio/
+backend/static/
 
-# OS files
-.DS_Store
-Thumbs.db
+# ── Sensitive files ───────────────────────────────────────────────────────────
+.env
+.env.*
 
-# Logs
-*.log
+# ── Volume data ───────────────────────────────────────────────────────────────
+# Model weights can be GBs — never send to the daemon.
+volumes/
+
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ── Editor / IDE ──────────────────────────────────────────────────────────────
+**/.vscode/
+**/.idea/
+**/*.swp
+**/*.swo
+
+# ── OS files ──────────────────────────────────────────────────────────────────
+**/.DS_Store
+**/Thumbs.db
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+**/*.log
+
+# ── Project assets not needed in the image ───────────────────────────────────
+README.md
+screenshot.png
+unraid/
+.history/
+.claude/
+
+# ── Dev tooling ───────────────────────────────────────────────────────────────
+docker-compose*.yml
+justfile
+start.sh

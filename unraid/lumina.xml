@@ -112,6 +112,16 @@
     Type="Variable"
     Display="advanced">Qwen/Qwen2.5-Audio-3B-Instruct</Config>
 
+  <!-- ── Timezone ─────────────────────────────────── -->
+  <Config
+    Name="Timezone"
+    Target="TZ"
+    Default="UTC"
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Description="Container timezone. Defaults to UTC. Example: America/New_York">UTC</Config>
+
   <!-- ── Performance ────────────────────────────────── -->
   <Config
     Name="Compute Type"
