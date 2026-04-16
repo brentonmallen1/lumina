@@ -2,6 +2,11 @@
 # in FROM and COPY --from instructions across all stages.
 ARG PLAYWRIGHT_BASE_IMAGE=ubuntu:24.04
 
+# ── Stage 0: Playwright base alias ───────────────────────────────────────────
+# Docker doesn't support variable expansion in COPY --from, so we alias the
+# configurable base image as a named stage here.
+FROM ${PLAYWRIGHT_BASE_IMAGE} AS playwright-base
+
 # ── Stage 1: Build React frontend ────────────────────────────────────────────
 FROM node:20-slim AS node-builder
 
@@ -70,9 +75,6 @@ FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Re-declare global ARG so it is visible inside this stage for COPY --from.
-ARG PLAYWRIGHT_BASE_IMAGE=ubuntu:24.04
-
 # System packages + Chromium OS dependencies.
 # The Chromium deps below match playwright's Ubuntu 24.04 (noble) requirements.
 RUN apt-get update && \
@@ -108,9 +110,9 @@ RUN apt-get update && \
 # Copy Chromium browser binary and ffmpeg from the lightweight playwright base.
 # Only these files are extracted — the ubuntu:24.04 layers themselves are not
 # added to this image.
-COPY --from=${PLAYWRIGHT_BASE_IMAGE} /ms-playwright /ms-playwright
-COPY --from=${PLAYWRIGHT_BASE_IMAGE} /usr/local/bin/ffmpeg  /usr/local/bin/ffmpeg
-COPY --from=${PLAYWRIGHT_BASE_IMAGE} /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+COPY --from=playwright-base /ms-playwright /ms-playwright
+COPY --from=playwright-base /usr/local/bin/ffmpeg  /usr/local/bin/ffmpeg
+COPY --from=playwright-base /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
