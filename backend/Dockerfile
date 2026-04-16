@@ -83,6 +83,7 @@ RUN apt-get update && \
         git \
         curl \
         xz-utils \
+        tzdata \
         fonts-liberation \
         libasound2t64 \
         libatk-bridge2.0-0t64 \
