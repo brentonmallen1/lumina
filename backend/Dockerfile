@@ -1,6 +1,6 @@
-# Global build args — must be declared before the first FROM so they can be
-# referenced in FROM instructions across stages.
-ARG PLAYWRIGHT_BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+# Global build args must be declared before the first FROM so they can be used
+# in FROM and COPY --from instructions across all stages.
+ARG PLAYWRIGHT_BASE_IMAGE=ubuntu:24.04
 
 # ── Stage 1: Build React frontend ────────────────────────────────────────────
 FROM node:20-slim AS node-builder
@@ -61,10 +61,58 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     fi
 
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────
-# Derives from a pre-built base that has Chromium, its OS deps, and ffmpeg.
-# Build the base first (only needed when playwright or ffmpeg version changes):
-#   just build-playwright-base
-FROM ${PLAYWRIGHT_BASE_IMAGE}
+# Uses the CUDA base so GPU inference works. Chromium and ffmpeg are copied in
+# from the lightweight playwright-base (ubuntu:24.04, ~1 GB) rather than being
+# downloaded here, so releases don't re-fetch ~400 MB of browser binary.
+#
+# Build / refresh the playwright base first:  just build-playwright-base
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Re-declare global ARG so it is visible inside this stage for COPY --from.
+ARG PLAYWRIGHT_BASE_IMAGE=ubuntu:24.04
+
+# System packages + Chromium OS dependencies.
+# The Chromium deps below match playwright's Ubuntu 24.04 (noble) requirements.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        curl \
+        xz-utils \
+        fonts-liberation \
+        libasound2t64 \
+        libatk-bridge2.0-0t64 \
+        libatk1.0-0t64 \
+        libcups2t64 \
+        libdbus-1-3 \
+        libgbm1 \
+        libglib2.0-0t64 \
+        libgtk-3-0t64 \
+        libnspr4 \
+        libnss3 \
+        libpango-1.0-0 \
+        libvulkan1 \
+        libxcomposite1 \
+        libxcursor1 \
+        libxdamage1 \
+        libxfixes3 \
+        libxi6 \
+        libxkbcommon0 \
+        libxrandr2 \
+        libxss1 \
+        libxtst6 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Copy Chromium browser binary and ffmpeg from the lightweight playwright base.
+# Only these files are extracted — the ubuntu:24.04 layers themselves are not
+# added to this image.
+COPY --from=${PLAYWRIGHT_BASE_IMAGE} /ms-playwright /ms-playwright
+COPY --from=${PLAYWRIGHT_BASE_IMAGE} /usr/local/bin/ffmpeg  /usr/local/bin/ffmpeg
+COPY --from=${PLAYWRIGHT_BASE_IMAGE} /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 

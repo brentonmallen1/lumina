@@ -25,10 +25,10 @@ backend/static/
 
 # ── Volume data ───────────────────────────────────────────────────────────────
 # Model weights can be GBs — never send to the daemon.
-volumes/
+**/volumes/
 
 # ── Git ───────────────────────────────────────────────────────────────────────
-.git/
+**/.git/
 .gitignore
 .gitattributes
 
@@ -49,8 +49,8 @@ volumes/
 README.md
 screenshot.png
 unraid/
-.history/
-.claude/
+**/.history/
+**/.claude/
 
 # ── Dev tooling ───────────────────────────────────────────────────────────────
 docker-compose*.yml

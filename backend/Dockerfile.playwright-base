@@ -1,23 +1,20 @@
 # ── Playwright + ffmpeg base ──────────────────────────────────────────────────
-# Pre-built image containing Chromium (with all OS deps) and ffmpeg.
-# Used as the FROM for the main image so every release build does not
-# re-download ~400 MB of browser binary.
-#
-# Rebuild whenever the playwright version (in uv.lock) or ffmpeg changes:
+# Lightweight Ubuntu image containing only Chromium + its OS deps + ffmpeg.
+# Intentionally does NOT use the CUDA base — that would add ~15 GB for no reason.
+# Rebuild when the playwright version (in uv.lock) or ffmpeg changes:
 #   just build-playwright-base
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Playwright version is extracted from uv.lock by the justfile at build time.
+# Version is extracted from uv.lock by the justfile and passed via --build-arg.
 ARG PLAYWRIGHT_VERSION
 
-# Install Chromium + its system deps via playwright, then strip out pip.
-# All Playwright OS deps (libnss3, libglib2.0-0, etc.) are marked "manually
-# installed" by apt when playwright calls apt-get, so autoremove won't touch them.
+# Install Chromium + its system deps via playwright, then strip pip back out.
+# PLAYWRIGHT_BROWSERS_PATH controls where the browser binary lands.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        git \
         curl \
         xz-utils \
         python3-minimal \
@@ -30,9 +27,8 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-ENV PATH="/usr/local/bin:${PATH}"
-
 # Static ffmpeg binary — separate layer so ffmpeg updates don't bust the Chromium layer
+ENV PATH="/usr/local/bin:${PATH}"
 RUN set -eux; \
     mkdir -p /usr/local/bin; \
     curl -fL --retry 3 https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
