@@ -16,7 +16,6 @@ frontend/.vite/
 # These exist locally but are volume-mounted or regenerated in the container.
 backend/cache/
 backend/data/
-backend/audio/
 backend/static/
 
 # ── Sensitive files ───────────────────────────────────────────────────────────
