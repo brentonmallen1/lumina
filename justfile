@@ -266,8 +266,6 @@ release:
         --file backend/Dockerfile \
         --build-arg PLAYWRIGHT_BASE_IMAGE="${registry}:playwright-base" \
         --provenance=false \
-        --cache-from "type=registry,ref=${registry}:buildcache" \
-        --cache-to   "type=registry,ref=${registry}:buildcache,mode=max" \
         --tag "${registry}:${version}" \
         --tag "${registry}:latest" \
         --push \
@@ -312,8 +310,6 @@ release-canary:
         --build-arg INSTALL_CANARY=true \
         --build-arg PLAYWRIGHT_BASE_IMAGE="${registry}:playwright-base" \
         --provenance=false \
-        --cache-from "type=registry,ref=${registry}:buildcache-canary" \
-        --cache-to   "type=registry,ref=${registry}:buildcache-canary,mode=max" \
         --tag "${registry}:${version}-canary" \
         --tag "${registry}:canary" \
         --push \
