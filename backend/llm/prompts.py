@@ -24,7 +24,9 @@ PROMPTS: dict[str, dict[str, str]] = {
             "1. \"Project completed 2 weeks ahead of schedule\""
         ),
         "template": (
-            "Summarize the following content clearly and concisely:\n\n"
+            "Summarize the following content clearly and concisely.\n\n"
+            "If the content contains a \"top X\", ranked, or numbered list, include a **List Items** "
+            "section after the summary with each item and a brief description.\n\n"
             "{content}"
         ),
     },
@@ -92,6 +94,38 @@ PROMPTS: dict[str, dict[str, str]] = {
             "Generate a Q&A from the following content. "
             "Format as a numbered list of question-and-answer pairs. "
             "Cover the most important topics and concepts:\n\n"
+            "{content}"
+        ),
+    },
+    "tldr": {
+        "name": "TL;DR",
+        "system": (
+            "You are a summarization assistant. Produce ultra-brief, scannable summaries. "
+            "No filler, no citations, no lengthy prose — only the core ideas."
+        ),
+        "template": (
+            "Summarize the following in 250 words or less as a bulleted list of core ideas.\n"
+            "- One bullet per idea, kept to one sentence\n"
+            "- No citations, quotes, or filler phrases\n"
+            "- If this is a \"top X\" or ranked list, list the items\n"
+            "- Prioritize the most actionable or surprising takeaways\n\n"
+            "{content}"
+        ),
+    },
+    "extract_list": {
+        "name": "Extract List",
+        "system": (
+            "You extract ranked or enumerated lists from content. "
+            "Return only the list items with brief explanations. "
+            "If no list is present, say so clearly."
+        ),
+        "template": (
+            "Extract any \"top X\", ranked, or numbered list from the following content.\n"
+            "For each item provide:\n"
+            "1. The item name or title\n"
+            "2. One sentence explaining why it is included or what makes it notable\n\n"
+            "If no ranked or enumerated list is present, respond: "
+            "\"No ranked list detected in this content.\"\n\n"
             "{content}"
         ),
     },

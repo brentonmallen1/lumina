@@ -272,20 +272,15 @@ class YouTubeExtractor:
             if lines[0].startswith("WEBVTT") or lines[0].startswith("NOTE"):
                 continue
 
-            text_parts: list[str] = []
             for line in lines:
                 if "-->" in line or re.match(r"^\d+$", line.strip()):
                     continue
                 line = re.sub(r"<\d{2}:\d{2}:\d{2}\.\d{3}>", "", line)
                 line = re.sub(r"<[^>]+>", "", line)
                 line = line.strip()
-                if line:
-                    text_parts.append(line)
-
-            text = " ".join(text_parts)
-            if text and text not in seen:
-                seen.add(text)
-                texts.append(text)
+                if line and line not in seen:
+                    seen.add(line)
+                    texts.append(line)
 
         return " ".join(texts)
 

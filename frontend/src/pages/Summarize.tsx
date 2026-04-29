@@ -36,12 +36,14 @@ const TRANSCRIPT_MODE = { id: 'transcript', label: 'Transcript / Raw Text', hint
 
 // Static fallback modes (used before prompts load from API)
 const DEFAULT_modes: { id: string; label: string; hint: string }[] = [
-  { id: 'summary',         label: 'Summary',         hint: 'Concise prose overview' },
+  { id: 'summary',         label: 'Summary',         hint: 'Prose overview — includes list items when detected' },
   { id: 'key_points',      label: 'Key Points',      hint: 'Numbered list of main ideas' },
   { id: 'mind_map',        label: 'Mind Map',        hint: 'Hierarchical outline' },
   { id: 'action_items',    label: 'Action Items',    hint: 'Concrete tasks and next steps' },
   { id: 'q_and_a',         label: 'Q&A',             hint: 'Questions and answers' },
   { id: 'meeting_minutes', label: 'Meeting Minutes', hint: 'Structured notes from a meeting' },
+  { id: 'tldr',            label: 'TL;DR',           hint: 'Ultra-brief bullet summary (250 words max)' },
+  { id: 'extract_list',    label: 'Extract List',    hint: 'Pull out ranked or top-X lists' },
   TRANSCRIPT_MODE,
 ];
 
@@ -221,10 +223,11 @@ export default function Summarize() {
     api.getPrompts().then(prompts => {
       // Deduplicate by mode: custom prompts shadow built-ins for the same mode slug
       const seen = new Map<string, { id: string; label: string; hint: string }>();
+      const hintMap = Object.fromEntries(DEFAULT_modes.map(m => [m.id, m.hint]));
       // Process defaults first, then custom (custom overwrites defaults in the map)
       const sorted = [...prompts].sort((a, b) => Number(b.is_default) - Number(a.is_default));
       for (const p of sorted) {
-        seen.set(p.mode, { id: p.mode, label: p.name, hint: '' });
+        seen.set(p.mode, { id: p.mode, label: p.name, hint: hintMap[p.mode] ?? '' });
       }
       if (seen.size > 0) setModes([...seen.values(), TRANSCRIPT_MODE]);
     }).catch(() => {});
