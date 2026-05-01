@@ -491,7 +491,19 @@ export default function Summarize() {
 
   const copyResult = async () => {
     try {
-      await navigator.clipboard.writeText(result);
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(result);
+      } else {
+        // Fallback for non-HTTPS (HTTP LAN access)
+        const ta = document.createElement('textarea');
+        ta.value = result;
+        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
     } catch { /* denied */ }

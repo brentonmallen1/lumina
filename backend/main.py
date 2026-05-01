@@ -869,7 +869,7 @@ async def summarize_content(req: SummarizeRequest, _: bool = Depends(verify_auth
 
 # ── Shared LLM streaming helper ────────────────────────────────────────────
 
-async def _llm_summarize_sse(content: str, mode: str, model_override: str | None):
+async def _llm_summarize_sse(content: str, mode: str, model_override: str | None, title: str | None = None):
     """
     Async generator — yields SSE lines for an LLM summarization run.
     Shared by all three /api/summarize* endpoints.
@@ -881,7 +881,8 @@ async def _llm_summarize_sse(content: str, mode: str, model_override: str | None
         return
 
     prompt_data = get_prompt(mode)
-    prompt      = prompt_data["template"].format(content=content)
+    titled_content = f"Content title: {title}\n\n{content}" if title else content
+    prompt      = prompt_data["template"].format(content=titled_content)
     system      = prompt_data["system"]
     thinking    = _settings.get("ollama_thinking_enabled", "true") == "true"
     budget      = int(_settings.get("ollama_token_budget", "280"))
@@ -899,7 +900,7 @@ async def _llm_summarize_sse(content: str, mode: str, model_override: str | None
     yield "data: [DONE]\n\n"
 
 
-async def _extract_and_summarize_sse(extractor, source_arg, mode: str, model_override: str | None):
+async def _extract_and_summarize_sse(extractor, source_arg, mode: str, model_override: str | None, title: str | None = None):
     """
     Async generator that:
       1. Runs an extractor, forwarding status events as SSE phase events.
@@ -942,7 +943,7 @@ async def _extract_and_summarize_sse(extractor, source_arg, mode: str, model_ove
         yield "data: [DONE]\n\n"
         return
 
-    async for sse_line in _llm_summarize_sse(content, mode, model_override):
+    async for sse_line in _llm_summarize_sse(content, mode, model_override, title=title):
         yield sse_line
 
 
@@ -974,7 +975,9 @@ async def summarize_file(
     from extractors.pdf   import PDFExtractor
 
     contents = await file.read()
-    suffix   = Path(file.filename or "upload").suffix.lower()
+    filepath = Path(file.filename or "upload")
+    suffix   = filepath.suffix.lower()
+    title    = filepath.stem or None
 
     tmp = Path(tempfile.mktemp(suffix=suffix))
     tmp.write_bytes(contents)
@@ -1002,7 +1005,7 @@ async def summarize_file(
                 yield "data: [DONE]\n\n"
                 return
 
-            async for sse_line in _extract_and_summarize_sse(extractor, tmp, mode, None):
+            async for sse_line in _extract_and_summarize_sse(extractor, tmp, mode, None, title=title):
                 yield sse_line
         finally:
             tmp.unlink(missing_ok=True)
@@ -1028,22 +1031,29 @@ async def summarize_url(req: SummarizeUrlRequest, _: bool = Depends(verify_auth)
     source="youtube" — yt-dlp captions (fast) or audio download → Whisper → LLM
     source="url"     — Playwright page fetch → readability → LLM
     """
-    from extractors.youtube import YouTubeExtractor
+    from extractors.youtube import YouTubeExtractor, get_video_info
     from extractors.webpage import WebpageExtractor
 
     async def event_stream():
+        title: str | None = None
         if req.source == "youtube":
-            extractor = YouTubeExtractor(engine=_engine, prefer_captions=req.prefer_captions, cookies=_settings.get("youtube_cookies") or None)
+            cookies = _settings.get("youtube_cookies") or None
+            try:
+                info  = await asyncio.to_thread(get_video_info, req.url, cookies)
+                title = info.get("title") or None
+            except Exception:
+                pass
+            extractor  = YouTubeExtractor(engine=_engine, prefer_captions=req.prefer_captions, cookies=cookies)
             source_arg = req.url
         elif req.source == "url":
-            extractor = WebpageExtractor()
+            extractor  = WebpageExtractor()
             source_arg = req.url
         else:
             yield f"data: {json.dumps({'error': f'Unknown source type: {req.source}'})}\n\n"
             yield "data: [DONE]\n\n"
             return
 
-        async for sse_line in _extract_and_summarize_sse(extractor, source_arg, req.mode, req.model):
+        async for sse_line in _extract_and_summarize_sse(extractor, source_arg, req.mode, req.model, title=title):
             yield sse_line
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)

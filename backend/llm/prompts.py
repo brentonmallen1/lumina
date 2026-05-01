@@ -25,7 +25,8 @@ PROMPTS: dict[str, dict[str, str]] = {
         ),
         "template": (
             "Summarize the following content clearly and concisely.\n\n"
-            "If the content contains a \"top X\", ranked, or numbered list, include a **List Items** "
+            "If a content title is provided at the top, use it to understand the structure and subject. "
+            "If the title or content indicates a \"top X\", ranked, or numbered list, include a **List Items** "
             "section after the summary with each item and a brief description.\n\n"
             "{content}"
         ),
@@ -116,16 +117,20 @@ PROMPTS: dict[str, dict[str, str]] = {
         "name": "Extract List",
         "system": (
             "You extract ranked or enumerated lists from content. "
-            "Return only the list items with brief explanations. "
-            "If no list is present, say so clearly."
+            "Output ONLY the list items — no intro, no summary, no extra sections. "
+            "If no list is present, say so clearly and stop."
         ),
         "template": (
-            "Extract any \"top X\", ranked, or numbered list from the following content.\n"
-            "For each item provide:\n"
-            "1. The item name or title\n"
-            "2. One sentence explaining why it is included or what makes it notable\n\n"
-            "If no ranked or enumerated list is present, respond: "
-            "\"No ranked list detected in this content.\"\n\n"
+            "Scan the following content for a ranked or numbered list. "
+            "Look for patterns like \"Number 15\", \"#1\", \"at number X\", \"coming in at X\", etc.\n\n"
+            "If a content title is provided at the top (e.g. \"Content title: Top 15 ...\"), use it to "
+            "infer the expected number of items and verify you found that many. "
+            "Videos sometimes include bonus or honorable mention items beyond the stated count — include those too.\n\n"
+            "If you find a list, output EVERY item in this exact format and nothing else:\n\n"
+            "**#[rank]. [Title]**\n"
+            "[One sentence: what happened or why it is notable]\n\n"
+            "Important: list ALL items in order. Do not skip any. Do not add headers, intros, or summaries.\n\n"
+            "If no ranked list is present, respond only: \"No ranked list detected in this content.\"\n\n"
             "{content}"
         ),
     },
