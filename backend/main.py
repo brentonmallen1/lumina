@@ -900,7 +900,14 @@ async def _llm_summarize_sse(content: str, mode: str, model_override: str | None
     yield "data: [DONE]\n\n"
 
 
-async def _extract_and_summarize_sse(extractor, source_arg, mode: str, model_override: str | None, title: str | None = None):
+async def _extract_and_summarize_sse(
+    extractor,
+    source_arg,
+    mode: str,
+    model_override: str | None,
+    title: str | None = None,
+    description: str | None = None,
+):
     """
     Async generator that:
       1. Runs an extractor, forwarding status events as SSE phase events.
@@ -932,6 +939,10 @@ async def _extract_and_summarize_sse(extractor, source_arg, mode: str, model_ove
         yield "data: [DONE]\n\n"
         return
 
+    # Prepend source description if available (useful for recipe extraction from YouTube)
+    if description:
+        content = f"Source description:\n{description}\n\n---\n\nTranscript:\n{content}"
+
     # Emit extracted text so the frontend can use it for chat
     # Cap at SOURCE_CONTENT_LIMIT to avoid huge SSE payloads
     _SOURCE_LIMIT = 32_000
@@ -942,6 +953,9 @@ async def _extract_and_summarize_sse(extractor, source_arg, mode: str, model_ove
         yield f"data: {json.dumps({'text': content})}\n\n"
         yield "data: [DONE]\n\n"
         return
+
+    # Signal LLM processing phase
+    yield f"data: {json.dumps({'phase': 'thinking', 'detail': f'Processing with {mode} mode…'})}\n\n"
 
     async for sse_line in _llm_summarize_sse(content, mode, model_override, title=title):
         yield sse_line
@@ -1036,13 +1050,17 @@ async def summarize_url(req: SummarizeUrlRequest, _: bool = Depends(verify_auth)
 
     async def event_stream():
         title: str | None = None
+        description: str | None = None
         if req.source == "youtube":
+            yield f"data: {json.dumps({'phase': 'extracting', 'detail': 'Fetching video info…'})}\n\n"
             cookies = _settings.get("youtube_cookies") or None
             try:
                 info  = await asyncio.to_thread(get_video_info, req.url, cookies)
                 title = info.get("title") or None
+                description = info.get("description") or None
+                yield f"data: {json.dumps({'phase': 'extracting', 'detail': f'Found: {title[:60]}…' if title and len(title) > 60 else f'Found: {title}'})}\n\n"
             except Exception:
-                pass
+                yield f"data: {json.dumps({'phase': 'extracting', 'detail': 'Could not fetch video info — continuing…'})}\n\n"
             extractor  = YouTubeExtractor(engine=_engine, prefer_captions=req.prefer_captions, cookies=cookies)
             source_arg = req.url
         elif req.source == "url":
@@ -1053,7 +1071,9 @@ async def summarize_url(req: SummarizeUrlRequest, _: bool = Depends(verify_auth)
             yield "data: [DONE]\n\n"
             return
 
-        async for sse_line in _extract_and_summarize_sse(extractor, source_arg, req.mode, req.model, title=title):
+        async for sse_line in _extract_and_summarize_sse(
+            extractor, source_arg, req.mode, req.model, title=title, description=description
+        ):
             yield sse_line
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)

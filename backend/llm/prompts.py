@@ -129,8 +129,46 @@ PROMPTS: dict[str, dict[str, str]] = {
             "If you find a list, output EVERY item in this exact format and nothing else:\n\n"
             "**#[rank]. [Title]**\n"
             "[One sentence: what happened or why it is notable]\n\n"
-            "Important: list ALL items in order. Do not skip any. Do not add headers, intros, or summaries.\n\n"
+            "Important:\n"
+            "- List ALL items — do not skip any\n"
+            "- Preserve the original order from the content (countdown 15→1 or count-up 1→15)\n"
+            "- Do not add headers, intros, or summaries\n\n"
             "If no ranked list is present, respond only: \"No ranked list detected in this content.\"\n\n"
+            "{content}"
+        ),
+    },
+    "recipe": {
+        "name": "Recipe",
+        "system": (
+            "You extract and format recipes from content. "
+            "Output a clean, well-structured recipe in markdown format. "
+            "Be precise about quantities, temperatures, and timings. "
+            "If the content is not a recipe, say so clearly."
+        ),
+        "template": (
+            "Extract and format the recipe from the following content.\n\n"
+            "Look for recipe data in these places (in order of priority):\n"
+            "1. 'Structured data (schema.org)' section — authoritative ingredients/instructions from the webpage\n"
+            "2. 'Source description' — video description may contain the official ingredients list\n"
+            "3. Main content/transcript — spoken or written recipe details\n\n"
+            "Cross-reference all sources. Note any discrepancies (e.g., different quantities, missing items).\n\n"
+            "Output the recipe in this exact markdown format:\n\n"
+            "# [Recipe Title]\n\n"
+            "[1-2 sentence description of the dish]\n\n"
+            "**Prep time:** [X minutes]  \n"
+            "**Cook time:** [X minutes]  \n"
+            "**Servings:** [X servings]\n\n"
+            "## Ingredients\n\n"
+            "- [quantity] [ingredient]\n"
+            "- [quantity] [ingredient]\n"
+            "...\n\n"
+            "## Instructions\n\n"
+            "1. [Step with temperatures, times, and specific details]\n"
+            "2. [Next step]\n"
+            "...\n\n"
+            "## Notes\n\n"
+            "- [Any tips, variations, or discrepancies between sources]\n\n"
+            "If the content does not contain a recipe, respond: \"No recipe detected in this content.\"\n\n"
             "{content}"
         ),
     },

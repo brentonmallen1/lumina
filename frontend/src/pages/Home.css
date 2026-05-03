@@ -45,10 +45,9 @@
 }
 
 .home-section-title {
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
   color: var(--text-muted);
   margin: 0;
 }
@@ -61,6 +60,17 @@
 }
 
 /* ── Responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .home-inner {
+    gap: 28px;
+  }
+
+  .home-grid {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+  }
+}
+
 @media (max-width: 600px) {
   .home {
     padding: 24px 16px 48px;

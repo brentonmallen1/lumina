@@ -7,6 +7,9 @@ from pathlib import Path
 
 from .base import StatusCallback
 
+# Limit pages to prevent memory/time issues with huge PDFs
+_MAX_PAGES = 200
+
 
 class PDFExtractor:
     async def extract(self, file_path: Path, on_status: StatusCallback) -> str:
@@ -24,7 +27,11 @@ class PDFExtractor:
 
         pages: list[str] = []
         with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages:
+            total_pages = len(pdf.pages)
+            for i, page in enumerate(pdf.pages):
+                if i >= _MAX_PAGES:
+                    pages.append(f"\n[Truncated: showing {_MAX_PAGES} of {total_pages} pages]")
+                    break
                 t = page.extract_text()
                 if t:
                     pages.append(t.strip())

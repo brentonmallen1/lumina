@@ -61,16 +61,17 @@ _VALID_VIDEO_QUALITIES = {"best", "2160", "1080", "720", "480", "360"}
 def get_video_info(url: str, cookies: str | None = None) -> dict:
     """
     Fetch video metadata without downloading.
-    Returns: { title, duration_seconds, thumbnail, uploader }
+    Returns: { title, description, duration_seconds, thumbnail, uploader }
     Raises ValueError for invalid / private / unavailable videos.
     """
     import yt_dlp
 
     with _cookies_file(cookies) as cf:
         ydl_opts: dict = {
-            "quiet":        True,
-            "no_warnings":  True,
-            "skip_download": True,
+            "quiet":          True,
+            "no_warnings":    True,
+            "skip_download":  True,
+            "socket_timeout": 15,
         }
         if cf:
             ydl_opts["cookiefile"] = cf
@@ -83,6 +84,7 @@ def get_video_info(url: str, cookies: str | None = None) -> dict:
 
     return {
         "title":            info.get("title", ""),
+        "description":      info.get("description", ""),
         "duration_seconds": info.get("duration"),
         "thumbnail":        info.get("thumbnail"),
         "uploader":         info.get("uploader", ""),
@@ -121,6 +123,8 @@ def download_video(
             "quiet":               True,
             "no_warnings":         True,
             "writethumbnail":      False,
+            "socket_timeout":      30,
+            "retries":             3,
         }
         if cf:
             ydl_opts["cookiefile"] = cf
@@ -177,6 +181,8 @@ def download_audio(
             "postprocessors": [postprocessor],
             "quiet":          True,
             "no_warnings":    True,
+            "socket_timeout": 30,
+            "retries":        3,
         }
         if cf:
             ydl_opts["cookiefile"] = cf
@@ -207,21 +213,25 @@ class YouTubeExtractor:
 
     async def extract(self, url: str, on_status: StatusCallback) -> str:
         if self.prefer_captions:
-            await on_status("extracting", "Fetching YouTube captions…")
+            await on_status("extracting", "Checking for YouTube captions…")
             try:
                 captions = await asyncio.to_thread(self._fetch_captions, url)
                 if captions:
+                    await on_status("extracting", "Captions found — using existing transcript")
                     return captions
             except Exception:
                 pass
-            await on_status("extracting", "Captions unavailable — downloading audio…")
-        else:
-            await on_status("extracting", "Downloading YouTube audio…")
+            await on_status("extracting", "Captions unavailable — falling back to audio transcription")
 
+        await on_status("extracting", "Downloading audio from YouTube…")
         audio_path, tmpdir = await asyncio.to_thread(self._download_audio, url)
-        await on_status("transcribing", "Running Whisper transcription — this may take a while…")
+        await on_status("extracting", "Audio downloaded — preparing for transcription…")
+
         try:
-            return await asyncio.to_thread(self._transcribe, audio_path)
+            await on_status("transcribing", "Running Whisper transcription — this may take a while…")
+            transcript = await asyncio.to_thread(self._transcribe, audio_path)
+            await on_status("transcribing", "Transcription complete")
+            return transcript
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -241,6 +251,8 @@ class YouTubeExtractor:
                     "outtmpl":           f"{tmpdir}/%(id)s.%(ext)s",
                     "quiet":             True,
                     "no_warnings":       True,
+                    "socket_timeout":    30,
+                    "retries":           3,
                 }
                 if cf:
                     ydl_opts["cookiefile"] = cf
@@ -298,6 +310,8 @@ class YouTubeExtractor:
                 ],
                 "quiet":       True,
                 "no_warnings": True,
+                "socket_timeout": 30,
+                "retries":        3,
             }
             if cf:
                 ydl_opts["cookiefile"] = cf
@@ -309,4 +323,5 @@ class YouTubeExtractor:
         return tmpdir / f"{video_id}.mp3", tmpdir
 
     def _transcribe(self, audio_path: Path) -> str:
-        return self.engine.transcribe(str(audio_path))
+        result = self.engine.transcribe(str(audio_path))
+        return result.get("text", "") if isinstance(result, dict) else result

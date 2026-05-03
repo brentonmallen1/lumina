@@ -1,0 +1,37 @@
+# Lumina
+
+Self-hostable AI content extraction and analysis tool. Transcribes, summarizes, and enables chat with audio, video, YouTube, web pages, PDFs, images, or text — all locally.
+
+## Design Context
+
+### Users
+Power users and developers who self-host tools for maximum control. They're technically sophisticated, value efficiency, and expect things to "just work." They process substantial amounts of content (audio, video, documents) and want a tool that respects their time and intelligence.
+
+### Brand Personality
+**Voice**: Confident but approachable. Helpful without being patronizing.
+**Tone**: Warm, clear, direct. Like a capable colleague who explains things well.
+**3-word personality**: Capable, friendly, refined.
+**Emotional goal**: Users should feel empowered and in control, not overwhelmed or talked down to.
+
+### Aesthetic Direction
+**Visual tone**: Clean and purposeful with warmth. Not sterile or cold, but not playful either. Refined utility.
+**Theme**: Light mode primary, dark mode supported. Both should feel intentional.
+**References**: macOS system apps (refined utility), Linear (clean but warm), Raycast (power user friendly).
+
+**Anti-references** (explicitly avoid):
+- Generic SaaS dashboards (card-heavy, gradient accents, Notion/Intercom clones)
+- AI hype aesthetic (neon gradients, cyan-on-dark, "futuristic" glows)
+- Overly playful/cute (bounce animations, rounded everything, pastels)
+- Dense enterprise tools (cluttered sidebars, tiny text, overwhelming options)
+
+### Design Principles
+
+1. **Clarity over decoration** — Every element should communicate, not decorate. If it doesn't help the user, remove it.
+
+2. **Progressive disclosure** — Start simple, reveal depth on demand. Power features exist but don't clutter the happy path.
+
+3. **Respectful defaults** — Assume competence. Don't over-explain, but do provide clear feedback and state.
+
+4. **Warm precision** — Technical capability with human touch. Precise typography, considered spacing, but not cold or sterile.
+
+5. **Content-first** — The user's content (transcripts, summaries, results) is the star. UI should support, not compete.

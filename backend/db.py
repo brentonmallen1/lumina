@@ -189,8 +189,59 @@ def get_setting(key: str, default: str = "") -> str:
     return row["value"] if row else default
 
 
+def _validate_setting(key: str, value: str) -> str | None:
+    """Validate a setting value. Returns error message or None if valid."""
+    if key == "max_upload_size_mb":
+        try:
+            v = int(value)
+            if v < 1 or v > 10000:
+                return "max_upload_size_mb must be between 1 and 10000"
+        except ValueError:
+            return "max_upload_size_mb must be a number"
+    elif key == "audio_cache_ttl_hours":
+        try:
+            v = int(value)
+            if v < 0:
+                return "audio_cache_ttl_hours cannot be negative"
+        except ValueError:
+            return "audio_cache_ttl_hours must be a number"
+    elif key == "ollama_timeout":
+        try:
+            v = int(value)
+            if v < 10 or v > 3600:
+                return "ollama_timeout must be between 10 and 3600 seconds"
+        except ValueError:
+            return "ollama_timeout must be a number"
+    elif key == "ollama_token_budget":
+        try:
+            v = int(value)
+            if v < 0:
+                return "ollama_token_budget cannot be negative"
+        except ValueError:
+            return "ollama_token_budget must be a number"
+    elif key == "ollama_url":
+        if value and not (value.startswith("http://") or value.startswith("https://")):
+            return "ollama_url must start with http:// or https://"
+    elif key in ("auth_enabled", "tts_enabled", "ollama_thinking_enabled",
+                 "enhance_normalize", "enhance_denoise", "enhance_isolate", "enhance_upsample"):
+        if value not in ("true", "false"):
+            return f"{key} must be 'true' or 'false'"
+    return None
+
+
 def update_settings(updates: dict[str, str]) -> dict[str, str]:
-    """Persist a dict of key/value updates and return the full settings dict."""
+    """Persist a dict of key/value updates and return the full settings dict.
+
+    Raises ValueError if any setting fails validation.
+    """
+    errors = []
+    for key, value in updates.items():
+        err = _validate_setting(key, str(value))
+        if err:
+            errors.append(err)
+    if errors:
+        raise ValueError("; ".join(errors))
+
     with _lock:
         conn = _connect()
         for key, value in updates.items():

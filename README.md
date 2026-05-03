@@ -12,7 +12,7 @@ A self-hostable AI content extraction and analysis tool. Point it at audio, vide
 
 | Tool | What you give it | What you get |
 |---|---|---|
-| **Summarize** | Audio, video, YouTube URL, webpage, PDF, image, or text | AI-generated summary, key points, mind map, action items, Q&A, meeting minutes |
+| **Summarize** | Audio, video, YouTube URL, webpage, PDF, image, or text | AI-generated summary, key points, mind map, action items, Q&A, meeting minutes, TL;DR, list extraction, recipe extraction |
 | **Transcribe** | Audio or video file | Full transcript with word-level timestamps, SRT/VTT export |
 | **Audio Enhance** | Any audio file | Noise reduction, vocal isolation, super-resolution, normalization |
 | **Text to Speech** | Any text | High-quality speech synthesis via Kokoro; 28 English voices |
@@ -26,7 +26,7 @@ A self-hostable AI content extraction and analysis tool. Point it at audio, vide
 ## Features
 
 - **Universal input** — audio, video, YouTube, webpage, PDF, image, or raw text in one interface
-- **Multiple summarization modes** — summary, key points, mind map, action items, Q&A, meeting minutes; fully prompt-customizable
+- **Multiple summarization modes** — summary, key points, mind map, action items, Q&A, meeting minutes, TL;DR, list extraction, recipe extraction; fully prompt-customizable
 - **Streaming responses** — LLM output streams token by token via SSE; no waiting for the full response
 - **Source caching** — extracted content is cached in-session; switching modes re-runs only the LLM, not the extraction
 - **In-context chat** — after any summarization, chat with the source document using the full extracted text
@@ -348,7 +348,7 @@ All summarization endpoints stream [Server-Sent Events](https://developer.mozill
 | `POST` | `/api/summarize/file` | form: `file`, `file_type`, `mode` | Upload a file (audio, video, PDF) and summarize. |
 | `POST` | `/api/summarize/image` | form: `file`, `mode` | Summarize an image via vision LLM. |
 
-Available `mode` values: `summary`, `key_points`, `mind_map`, `action_items`, `q_and_a`, `meeting_minutes` (customizable in Settings → Prompts).
+Available `mode` values: `summary`, `key_points`, `mind_map`, `action_items`, `q_and_a`, `meeting_minutes`, `tldr`, `extract_list`, `recipe` (customizable in Settings → Prompts).
 
 ```bash
 # Summarize a YouTube video

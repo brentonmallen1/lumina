@@ -5,47 +5,47 @@
 
 /* ── Global CSS variables ─────────────────────────────────────────────── */
 :root {
-  --bg:           #e6e8ec;
-  --surface:      #eef0f3;
-  --surface-hover:#e0e3e8;
-  --border:       #c8cdd5;
-  --border-hover: #b8bdc5;
-  --border-focus: #0891b2;
-  --text:         #1e2330;
-  --text-muted:   #4d5464;
-  --accent:       #0891b2;
-  --accent-hover: #0e7490;
+  --bg:           #f5f4f1;
+  --surface:      #fdfcfa;
+  --surface-hover:#f0eeea;
+  --border:       #ddd9d1;
+  --border-hover: #ccc7bc;
+  --border-focus: #b45309;
+  --text:         #1c1917;
+  --text-muted:   #78716c;
+  --accent:       #b45309;
+  --accent-hover: #92400e;
   --accent-text:  #ffffff;
-  --accent-subtle:#cffafe;
-  --accent-shadow:rgba(8, 145, 178, 0.3);
-  --danger:       #d93535;
-  --danger-bg:    #f0e4e4;
-  --danger-border:#d9b0b0;
-  --danger-text:  #a01818;
-  --success:      #1a9e4a;
+  --accent-subtle:#fef3c7;
+  --accent-shadow:rgba(180, 83, 9, 0.25);
+  --danger:       #dc2626;
+  --danger-bg:    #fef2f2;
+  --danger-border:#fecaca;
+  --danger-text:  #991b1b;
+  --success:      #16a34a;
   --warn:         #d97706;
   --warn-bg:      rgba(217, 119, 6, 0.08);
   --warn-border:  rgba(217, 119, 6, 0.3);
   --warn-text:    #92400e;
-  --radius:       12px;
-  --radius-sm:    8px;
-  --shadow:       0 1px 3px rgba(30, 35, 48, 0.06), 0 4px 16px rgba(30, 35, 48, 0.06);
-  --shadow-hover: 0 2px 8px rgba(30, 35, 48, 0.08), 0 8px 24px rgba(30, 35, 48, 0.08);
-  --focus-ring:   0 0 0 3px rgba(8, 145, 178, 0.4);
+  --radius:       10px;
+  --radius-sm:    6px;
+  --shadow:       0 1px 2px rgba(28, 25, 23, 0.03), 0 2px 8px rgba(28, 25, 23, 0.04);
+  --shadow-hover: 0 2px 4px rgba(28, 25, 23, 0.05), 0 6px 16px rgba(28, 25, 23, 0.06);
+  --focus-ring:   0 0 0 3px rgba(180, 83, 9, 0.25);
 }
 
 [data-theme="dark"] {
-  --bg:           #1a1c22;
-  --surface:      #22252e;
-  --surface-hover:#2a2d38;
-  --border:       #383d4a;
-  --border-hover: #454c5c;
-  --border-focus: #22d3ee;
-  --text:         #e8eaf0;
-  --text-muted:   #9098aa;
-  --accent:       #22d3ee;
-  --accent-hover: #0891b2;
-  --accent-subtle:rgba(8, 145, 178, 0.15);
+  --bg:           #171412;
+  --surface:      #231f1c;
+  --surface-hover:#2e2926;
+  --border:       #3d3733;
+  --border-hover: #524a44;
+  --border-focus: #f59e0b;
+  --text:         #fafaf9;
+  --text-muted:   #a8a29e;
+  --accent:       #f59e0b;
+  --accent-hover: #d97706;
+  --accent-subtle:rgba(245, 158, 11, 0.12);
   --danger:       #f87171;
   --danger-bg:    rgba(239, 68, 68, 0.1);
   --danger-border:rgba(239, 68, 68, 0.3);
@@ -120,6 +120,29 @@ body {
 .skip-link:focus {
   top: 8px;
 }
+
+/* ── Shared animations ────────────────────────────────────────────────── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.95); }
+  50%      { opacity: 1;   transform: scale(1.05); }
+}
+
+@keyframes fade {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+@keyframes progress-slide {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.animate-spin { animation: spin 0.8s linear infinite; }
+.animate-pulse { animation: pulse 1.2s ease-in-out infinite; }
 
 /* ── Reduced motion ───────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {

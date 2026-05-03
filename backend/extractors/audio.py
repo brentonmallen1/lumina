@@ -19,14 +19,19 @@ class AudioExtractor:
         enhanced = file_path
 
         if self.pipeline and self.options and self.options.any_active:
+            await on_status("extracting", "Enhancing audio…")
             enhanced = await self.pipeline.run(file_path, self.options, on_status)
+            await on_status("extracting", "Audio enhancement complete")
 
         try:
             await on_status("transcribing", "Running Whisper transcription — this may take a while…")
-            return await asyncio.to_thread(self._run, enhanced)
+            transcript = await asyncio.to_thread(self._run, enhanced)
+            await on_status("transcribing", "Transcription complete")
+            return transcript
         finally:
             if enhanced != file_path:
                 enhanced.unlink(missing_ok=True)
 
     def _run(self, file_path: Path) -> str:
-        return self.engine.transcribe(str(file_path))
+        result = self.engine.transcribe(str(file_path))
+        return result.get("text", "") if isinstance(result, dict) else result

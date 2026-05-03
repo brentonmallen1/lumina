@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { Clock, Settings, Zap, Sun, Moon } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
+import * as api from '../api/client';
 import './Layout.css';
 
 export default function Layout() {
@@ -8,16 +10,30 @@ export default function Layout() {
   const isSettings = location.pathname === '/settings';
   const isHistory  = location.pathname === '/history';
   const { isDark, toggle } = useTheme();
+  const [model, setModel] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getSettings().then(s => {
+      if (s.ollama_model) setModel(s.ollama_model);
+    }).catch(() => {});
+  }, []);
 
   return (
     <div className="layout">
       <a href="#main-content" className="skip-link">Skip to main content</a>
 
       <header className="layout-header">
-        <Link to="/" className="layout-brand">
-          <Zap size={20} className="layout-brand-icon" aria-hidden="true" />
-          <span className="layout-brand-name">Lumina</span>
-        </Link>
+        <div className="layout-brand-group">
+          <Link to="/" className="layout-brand">
+            <Zap size={20} className="layout-brand-icon" aria-hidden="true" />
+            <span className="layout-brand-name">Lumina</span>
+          </Link>
+          {model && (
+            <span className="layout-model" title={`LLM: ${model}`}>
+              {model}
+            </span>
+          )}
+        </div>
 
         <nav className="layout-nav" aria-label="Global navigation">
           <button

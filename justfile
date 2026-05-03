@@ -68,17 +68,13 @@ download:
 dev-api:
     cd backend && uv run python -m uvicorn main:app \
         --reload \
-        --reload-exclude '.venv' \
-        --reload-exclude 'cache' \
-        --reload-exclude 'static' \
-        --reload-exclude '*.pyc' \
-        --reload-exclude '__pycache__' \
+        --reload-exclude '.venv/*' --reload-exclude 'cache/*' --reload-exclude 'data/*' \
         --log-level warning \
         --port "${APP_PORT:-8080}"
 
 # Run only the Vite dev server (proxies /api to API server).
 # Auto-installs npm deps if node_modules is missing.
-# Passes API_PORT so vite.config.ts proxies to the correct port.
+# Passes APP_PORT so vite.config.ts proxies to the correct port.
 dev-ui:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -86,7 +82,7 @@ dev-ui:
         echo "node_modules not found — running npm install..."
         cd frontend && npm install
     fi
-    cd frontend && API_PORT="${APP_PORT:-8080}" npm run dev
+    cd frontend && APP_PORT="${APP_PORT:-8080}" npm run dev
 
 # Build the React frontend into backend/static/
 build-ui:
@@ -95,21 +91,51 @@ build-ui:
 # Run the full dev stack: API server + Vite dev server in parallel.
 # Use this for active frontend work. Open http://localhost:5173 (Vite proxies /api).
 dev:
-    @echo "Starting API server on :${APP_PORT:-8080} and Vite dev server on :5173"
-    @trap 'kill 0' EXIT; \
-        just dev-api & \
-        just dev-ui & \
-        wait
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cleanup() {
+        echo ""
+        echo "Shutting down..."
+        # Kill uvicorn processes by port
+        lsof -ti :${APP_PORT:-8080} | xargs kill -9 2>/dev/null || true
+        # Kill vite processes by port
+        lsof -ti :5173 | xargs kill -9 2>/dev/null || true
+        # Kill any remaining background jobs from this session
+        jobs -p | xargs kill 2>/dev/null || true
+        exit 0
+    }
+    trap cleanup EXIT INT TERM
+
+    export APP_PORT="${APP_PORT:-8080}"
+    echo "Starting API server on :${APP_PORT} and Vite dev server on :5173"
+
+    # Start backend first
+    (cd backend && exec uv run python -m uvicorn main:app --reload --log-level warning --port "${APP_PORT}" \
+        --reload-exclude '.venv/*' --reload-exclude 'cache/*' --reload-exclude 'data/*') &
+    api_pid=$!
+
+    # Wait for backend to be ready before starting frontend
+    echo "Waiting for API server..."
+    for i in {1..30}; do
+        if curl -s -o /dev/null -w "" http://localhost:${APP_PORT}/api/settings 2>/dev/null; then
+            echo "API server ready"
+            break
+        fi
+        sleep 0.5
+    done
+
+    # Start frontend
+    (cd frontend && exec npm run dev) &
+    ui_pid=$!
+
+    wait $api_pid $ui_pid
 
 # Run API server with model pre-download (mirrors Docker entrypoint — use for backend-only work)
 dev-backend: download
     cd backend && uv run python -m uvicorn main:app \
         --reload \
-        --reload-exclude '.venv' \
-        --reload-exclude 'cache' \
-        --reload-exclude 'static' \
-        --reload-exclude '*.pyc' \
-        --reload-exclude '__pycache__' \
+        --reload-exclude '.venv/*' --reload-exclude 'cache/*' --reload-exclude 'data/*' \
         --log-level warning \
         --port "${APP_PORT:-8080}"
 

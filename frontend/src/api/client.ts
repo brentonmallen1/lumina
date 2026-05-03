@@ -530,7 +530,7 @@ export async function synthesizeSpeech(text: string, voice?: string): Promise<Bl
  *
  * Event shapes emitted by the backend:
  *   {"phase": "extracting"|"transcribing", "detail": "..."}  — extraction progress
- *   {"extracted_content": "..."}                              — full source text after extraction
+ *   {"extracted_content": "...", "content_truncated": bool}   — source text after extraction (truncated if >32KB)
  *   {"text": "...chunk..."}                                    — LLM output chunk
  *   {"error": "...message..."}                                — terminal error
  *   [DONE]                                                    — end of stream
@@ -541,7 +541,7 @@ async function consumeSSE(
   onChunk: (text: string) => void,
   onError: (message: string) => void,
   onDone: () => void,
-  onExtracted?: (content: string) => void,
+  onExtracted?: (content: string, truncated: boolean) => void,
 ): Promise<void> {
   const reader  = res.body!.getReader();
   const decoder = new TextDecoder();
@@ -564,7 +564,7 @@ async function consumeSSE(
           const ev = JSON.parse(payload);
           if (ev.error)             { onError(ev.error); return; }
           if (ev.phase)             { onPhase(ev.phase, ev.detail ?? ''); continue; }
-          if (ev.extracted_content) { onExtracted?.(ev.extracted_content); continue; }
+          if (ev.extracted_content) { onExtracted?.(ev.extracted_content, ev.content_truncated ?? false); continue; }
           if (ev.text)              { onChunk(ev.text); }
         } catch { /* partial / malformed line — skip */ }
       }
@@ -621,7 +621,7 @@ export async function summarizeFile(
   onError: (message: string) => void,
   onDone: () => void,
   enhancement?: Partial<EnhancementOptions>,
-  onExtracted?: (content: string) => void,
+  onExtracted?: (content: string, truncated: boolean) => void,
 ): Promise<void> {
   const form = new FormData();
   form.append('file', file);
@@ -693,7 +693,7 @@ export async function summarizeUrl(
   onChunk: (text: string) => void,
   onError: (message: string) => void,
   onDone: () => void,
-  onExtracted?: (content: string) => void,
+  onExtracted?: (content: string, truncated: boolean) => void,
 ): Promise<void> {
   let res: Response;
   try {

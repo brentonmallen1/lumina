@@ -35,15 +35,17 @@ const SOURCE_TABS: { id: SourceTab; label: string; icon: React.ElementType }[] =
 const TRANSCRIPT_MODE = { id: 'transcript', label: 'Transcript / Raw Text', hint: 'Raw transcription — no AI processing' };
 
 // Static fallback modes (used before prompts load from API)
+// Ordered: most common → most job-specific
 const DEFAULT_modes: { id: string; label: string; hint: string }[] = [
   { id: 'summary',         label: 'Summary',         hint: 'Prose overview — includes list items when detected' },
+  { id: 'tldr',            label: 'TL;DR',           hint: 'Ultra-brief bullet summary (250 words max)' },
   { id: 'key_points',      label: 'Key Points',      hint: 'Numbered list of main ideas' },
-  { id: 'mind_map',        label: 'Mind Map',        hint: 'Hierarchical outline' },
   { id: 'action_items',    label: 'Action Items',    hint: 'Concrete tasks and next steps' },
   { id: 'q_and_a',         label: 'Q&A',             hint: 'Questions and answers' },
+  { id: 'mind_map',        label: 'Mind Map',        hint: 'Hierarchical outline' },
   { id: 'meeting_minutes', label: 'Meeting Minutes', hint: 'Structured notes from a meeting' },
-  { id: 'tldr',            label: 'TL;DR',           hint: 'Ultra-brief bullet summary (250 words max)' },
   { id: 'extract_list',    label: 'Extract List',    hint: 'Pull out ranked or top-X lists' },
+  { id: 'recipe',          label: 'Recipe',          hint: 'Extract recipe with ingredients and steps' },
   TRANSCRIPT_MODE,
 ];
 
@@ -60,18 +62,29 @@ interface DropZoneProps {
   hint: string;
   icon: React.ElementType;
   disabled?: boolean;
+  maxSizeMb?: number;
+  onSizeError?: (msg: string) => void;
 }
 
-function DropZone({ accept, file, onFile, label, hint, icon: Icon, disabled }: DropZoneProps) {
+function DropZone({ accept, file, onFile, label, hint, icon: Icon, disabled, maxSizeMb, onSizeError }: DropZoneProps) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const validateAndSetFile = (f: File) => {
+    if (maxSizeMb && f.size > maxSizeMb * 1024 * 1024) {
+      const sizeMb = (f.size / (1024 * 1024)).toFixed(1);
+      onSizeError?.(`File too large (${sizeMb} MB). Maximum allowed: ${maxSizeMb} MB`);
+      return;
+    }
+    onFile(f);
+  };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
     if (disabled) return;
     const f = e.dataTransfer.files[0];
-    if (f) onFile(f);
+    if (f) validateAndSetFile(f);
   };
 
   const classes = [
@@ -98,7 +111,7 @@ function DropZone({ accept, file, onFile, label, hint, icon: Icon, disabled }: D
         type="file"
         accept={accept}
         style={{ display: 'none' }}
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ''; }}
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) validateAndSetFile(f); e.target.value = ''; }}
         disabled={disabled}
       />
 
@@ -174,11 +187,13 @@ export default function Summarize() {
   const [audioModels,    setAudioModels]    = useState<AudioModelMap | undefined>(undefined);
   const [ttsEnabled,     setTtsEnabled]     = useState(true);
   const [ttsVoice,       setTtsVoice]       = useState<string | undefined>(undefined);
+  const [maxUploadSizeMb, setMaxUploadSizeMb] = useState(500);
 
   // Persistent TTS audio player — lifted here so it survives mode/tab switches
   const [ttsAudioUrl,    setTtsAudioUrl]    = useState<string | null>(null);
   const [ttsLoading,     setTtsLoading]     = useState(false);
   const [ttsLoadSrc,     setTtsLoadSrc]     = useState<'result' | 'translation' | null>(null);
+  const [ttsError,       setTtsError]       = useState('');
   const ttsBlobUrlRef = useRef<string | null>(null);
 
   // Revoke audio blob URL on unmount
@@ -219,6 +234,8 @@ export default function Summarize() {
     api.getSettings().then(s => {
       setTtsEnabled(s.tts_enabled !== 'false');
       setTtsVoice(s.tts_voice || undefined);
+      const maxSize = parseInt(s.max_upload_size_mb, 10);
+      if (!isNaN(maxSize) && maxSize > 0) setMaxUploadSizeMb(maxSize);
     }).catch(() => {});
     api.getPrompts().then(prompts => {
       // Deduplicate by mode: custom prompts shadow built-ins for the same mode slug
@@ -229,7 +246,16 @@ export default function Summarize() {
       for (const p of sorted) {
         seen.set(p.mode, { id: p.mode, label: p.name, hint: hintMap[p.mode] ?? '' });
       }
-      if (seen.size > 0) setModes([...seen.values(), TRANSCRIPT_MODE]);
+      if (seen.size > 0) {
+        // Sort by DEFAULT_modes order, then append any custom modes not in the list
+        const orderMap = new Map(DEFAULT_modes.map((m, i) => [m.id, i]));
+        const modeList = [...seen.values()].sort((a, b) => {
+          const aIdx = orderMap.get(a.id) ?? 999;
+          const bIdx = orderMap.get(b.id) ?? 999;
+          return aIdx - bIdx;
+        });
+        setModes([...modeList, TRANSCRIPT_MODE]);
+      }
     }).catch(() => {});
   }, []);
 
@@ -280,13 +306,14 @@ export default function Summarize() {
     setTtsAudioUrl(null);
     setTtsLoading(true);
     setTtsLoadSrc(src);
+    setTtsError('');
     try {
       const blob = await api.synthesizeSpeech(text, ttsVoice);
       const url = URL.createObjectURL(blob);
       ttsBlobUrlRef.current = url;
       setTtsAudioUrl(url);
-    } catch {
-      // silently ignore — user can retry
+    } catch (err) {
+      setTtsError(err instanceof Error ? err.message : 'TTS generation failed — check voice model is downloaded');
     } finally {
       setTtsLoading(false);
       setTtsLoadSrc(null);
@@ -404,9 +431,16 @@ export default function Summarize() {
       }
     };
 
-    const onExtracted = (extracted: string) => {
+    const onExtracted = (extracted: string, truncated: boolean = false) => {
       setSourceContent(extracted);
       setModeCache(prev => ({ ...prev, transcript: { result: extracted, reasoning: '' } }));
+      if (truncated) {
+        setChatNotices(prev =>
+          prev.includes('Content truncated for chat (>32KB). Full content was used for summarization.')
+            ? prev
+            : [...prev, 'Content truncated for chat (>32KB). Full content was used for summarization.']
+        );
+      }
     };
 
     // Build a cache key for extractable sources (URL-based and file-based)
@@ -415,9 +449,9 @@ export default function Summarize() {
 
     // Wrap onExtracted to populate the cache after a fresh extraction
     const withCaching = (key: string, label: string, type: string, cb: typeof onExtracted) =>
-      (extracted: string) => {
+      (extracted: string, truncated: boolean = false) => {
         sourceCache.set(key, { content: extracted, label, sourceType: type });
-        cb(extracted);
+        cb(extracted, truncated);
       };
 
     // Try to serve from cache for sources that support it
@@ -694,6 +728,8 @@ export default function Summarize() {
               hint="MP3, WAV, M4A, FLAC, OGG, MP4, MKV, MOV, …"
               icon={Mic}
               disabled={isRunning}
+              maxSizeMb={maxUploadSizeMb}
+              onSizeError={(msg) => { setView('error'); setErrorMsg(msg); }}
             />
             <EnhancementPanel
               value={enhancement}
@@ -713,6 +749,8 @@ export default function Summarize() {
             hint="PDF files only"
             icon={FileIcon}
             disabled={isRunning}
+            maxSizeMb={maxUploadSizeMb}
+            onSizeError={(msg) => { setView('error'); setErrorMsg(msg); }}
           />
         )}
 
@@ -726,6 +764,8 @@ export default function Summarize() {
               hint="JPG, PNG, WebP, GIF — requires a vision-capable model"
               icon={ImageIcon}
               disabled={isRunning}
+              maxSizeMb={maxUploadSizeMb}
+              onSizeError={(msg) => { setView('error'); setErrorMsg(msg); }}
             />
           </>
         )}
@@ -872,6 +912,9 @@ export default function Summarize() {
                         : <><Volume2 size={13} aria-hidden="true" /> Read Aloud</>
                       }
                     </button>
+                  )}
+                  {ttsError && (
+                    <span className="summarize-tts-error" role="alert">{ttsError}</span>
                   )}
                   {mode === 'mind_map' && !renderMarkdown && (
                     <button className="summarize-action-btn" onClick={downloadSvg}>
