@@ -107,6 +107,29 @@ export function reenhance(jobId: string, enhancement: Partial<EnhancementOptions
   });
 }
 
+// ── Recipe JSON-LD Export ─────────────────────────────────────────────────
+
+export interface RecipeJsonLD {
+  '@context': string;
+  '@type': string;
+  name: string;
+  description?: string;
+  prepTime?: string;
+  cookTime?: string;
+  totalTime?: string;
+  recipeYield?: string;
+  recipeIngredient: string[];
+  recipeInstructions: { '@type': string; text: string }[];
+}
+
+export function convertRecipeToJsonLD(recipeMarkdown: string): Promise<RecipeJsonLD> {
+  return request<RecipeJsonLD>('/api/recipe/jsonld', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipe_markdown: recipeMarkdown }),
+  });
+}
+
 // ── Settings ───────────────────────────────────────────────────────────────
 
 export function getSettings(): Promise<Settings> {

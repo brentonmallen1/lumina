@@ -4,7 +4,7 @@ import {
   ArrowLeft, Sparkles, Copy, Download, RotateCcw,
   Mic, Youtube, Globe, FileText, File as FileIcon, Image as ImageIcon,
   AlertTriangle, Upload, X, Code, MessageSquare, Send, Trash2, Languages,
-  Volume2, Loader,
+  Volume2, Loader, FileJson,
 } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import * as api from '../api/client';
@@ -209,6 +209,12 @@ export default function Summarize() {
   const [translateError,  setTranslateError]  = useState('');
   const translateAccumRef = useRef('');
 
+  // ── Recipe format state ────────────────────────────────────────────────────
+  const [recipeFormat,  setRecipeFormat]  = useState<'markdown' | 'jsonld'>('markdown');
+  const [jsonLdLoading, setJsonLdLoading] = useState(false);
+  const [jsonLdError,   setJsonLdError]   = useState('');
+  const [jsonLdCopied,  setJsonLdCopied]  = useState(false);
+
   // ── Chat state ────────────────────────────────────────────────────────────
   // sourceContent holds the full text available for chat (set after submit)
   const [sourceContent,    setSourceContent]    = useState('');
@@ -282,6 +288,60 @@ export default function Summarize() {
     thinkDoneRef.current      = false;
     resultAccumRef.current    = '';
     reasoningAccumRef.current = '';
+    setJsonLdError('');
+  };
+
+  // ── Recipe JSON-LD handlers ────────────────────────────────────────────────
+
+  const generateJsonLD = async () => {
+    if (!result || submittedModeRef.current !== 'recipe') return;
+    setJsonLdLoading(true);
+    setJsonLdError('');
+    try {
+      const data = await api.convertRecipeToJsonLD(result);
+      // Store in modeCache so it persists
+      setModeCache(prev => ({
+        ...prev,
+        recipe_jsonld: { result: JSON.stringify(data, null, 2), reasoning: '' },
+      }));
+    } catch (err) {
+      setJsonLdError(err instanceof Error ? err.message : 'Failed to generate JSON-LD');
+    } finally {
+      setJsonLdLoading(false);
+    }
+  };
+
+  const copyJsonLD = async () => {
+    const isDirectJsonLd = submittedModeRef.current === 'recipe_jsonld';
+    const jsonResult = modeCache.recipe_jsonld?.result || (isDirectJsonLd ? result : null);
+    if (!jsonResult) return;
+    try {
+      await navigator.clipboard.writeText(jsonResult);
+      setJsonLdCopied(true);
+      setTimeout(() => setJsonLdCopied(false), 2000);
+    } catch {
+      /* clipboard denied */
+    }
+  };
+
+  const downloadJsonLD = () => {
+    const isDirectJsonLd = submittedModeRef.current === 'recipe_jsonld';
+    const jsonResult = modeCache.recipe_jsonld?.result || (isDirectJsonLd ? result : null);
+    if (!jsonResult) return;
+    let filename = 'recipe.json';
+    try {
+      const parsed = JSON.parse(jsonResult);
+      if (parsed.name) {
+        filename = `${parsed.name.toLowerCase().replace(/\s+/g, '-')}.json`;
+      }
+    } catch { /* use default filename */ }
+    const blob = new Blob([jsonResult], { type: 'application/ld+json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const runTranslation = async () => {
@@ -383,6 +443,9 @@ export default function Summarize() {
   const handleSubmit = async () => {
     if (!canSubmit) return;
 
+    // Use recipe_jsonld mode when JSON-LD format is selected for recipe
+    const effectiveMode = (mode === 'recipe' && recipeFormat === 'jsonld') ? 'recipe_jsonld' : mode;
+
     // Reset streaming state but keep modeCache (other modes' results stay)
     setView('thinking');
     setResult('');
@@ -390,11 +453,12 @@ export default function Summarize() {
     setWarningMsg('');
     setStatusDetail('');
     setReasoning('');
+    setJsonLdError('');
     rawBufferRef.current       = '';
     thinkDoneRef.current       = false;
     resultAccumRef.current     = '';
     reasoningAccumRef.current  = '';
-    submittedModeRef.current   = mode;
+    submittedModeRef.current   = effectiveMode;
     submittedSourceRef.current = sourceTab;
 
     const onPhase = (phase: string, detail: string) => {
@@ -408,6 +472,10 @@ export default function Summarize() {
       setView(v => v === 'error' ? v : 'done');
       const finalResult   = resultAccumRef.current;
       const finalReasoning = reasoningAccumRef.current;
+      // Default to markdown rendering for non-JSON outputs
+      if (submittedModeRef.current !== 'recipe_jsonld') {
+        setRenderMarkdown(true);
+      }
       setModeCache(prev => ({
         ...prev,
         [submittedModeRef.current]: {
@@ -466,7 +534,7 @@ export default function Summarize() {
       if (cached) {
         onPhase('extracting', 'Using cached extraction…');
         onExtracted(cached.content);
-        await api.summarize(cached.content, mode, null, onChunk, onError, onDone);
+        await api.summarize(cached.content, effectiveMode, null, onChunk, onError, onDone);
       } else {
         await fallback();
       }
@@ -477,14 +545,14 @@ export default function Summarize() {
         const trimmed = content.trim();
         setSourceContent(trimmed);
         setModeCache(prev => ({ ...prev, transcript: { result: trimmed, reasoning: '' } }));
-        await api.summarize(trimmed, mode, null, onChunk, onError, onDone);
+        await api.summarize(trimmed, effectiveMode, null, onChunk, onError, onDone);
         break;
       }
 
       case 'audio': {
         const key = fileCacheKey('audio', audioFile!);
         await tryFromCache(key, () =>
-          api.summarizeFile(audioFile!, 'audio', mode, onPhase, onChunk, onError, onDone, enhancement,
+          api.summarizeFile(audioFile!, 'audio', effectiveMode, onPhase, onChunk, onError, onDone, enhancement,
             withCaching(key, audioFile!.name, 'audio', onExtracted))
         );
         break;
@@ -493,7 +561,7 @@ export default function Summarize() {
       case 'pdf': {
         const key = fileCacheKey('pdf', pdfFile!);
         await tryFromCache(key, () =>
-          api.summarizeFile(pdfFile!, 'pdf', mode, onPhase, onChunk, onError, onDone, undefined,
+          api.summarizeFile(pdfFile!, 'pdf', effectiveMode, onPhase, onChunk, onError, onDone, undefined,
             withCaching(key, pdfFile!.name, 'pdf', onExtracted))
         );
         break;
@@ -502,7 +570,7 @@ export default function Summarize() {
       case 'youtube': {
         const key = `youtube:${youtubeUrl.trim()}`;
         await tryFromCache(key, () =>
-          api.summarizeUrl(youtubeUrl.trim(), 'youtube', mode, preferCaptions, onPhase, onChunk, onError, onDone,
+          api.summarizeUrl(youtubeUrl.trim(), 'youtube', effectiveMode, preferCaptions, onPhase, onChunk, onError, onDone,
             withCaching(key, youtubeUrl.trim(), 'youtube', onExtracted), onWarning)
         );
         break;
@@ -511,7 +579,7 @@ export default function Summarize() {
       case 'url': {
         const key = `url:${urlInput.trim()}`;
         await tryFromCache(key, () =>
-          api.summarizeUrl(urlInput.trim(), 'url', mode, false, onPhase, onChunk, onError, onDone,
+          api.summarizeUrl(urlInput.trim(), 'url', effectiveMode, false, onPhase, onChunk, onError, onDone,
             withCaching(key, urlInput.trim(), 'url', onExtracted), onWarning)
         );
         break;
@@ -519,7 +587,7 @@ export default function Summarize() {
 
       case 'image':
         // No onExtracted: images have no text content, chat panel stays hidden
-        await api.summarizeImage(imageFile!, mode, onChunk, onError, onDone);
+        await api.summarizeImage(imageFile!, effectiveMode, onChunk, onError, onDone);
         break;
     }
   };
@@ -834,6 +902,28 @@ export default function Summarize() {
             })}
           </div>
 
+          {/* Recipe format toggle — shown when recipe mode is selected */}
+          {mode === 'recipe' && (
+            <div className="summarize-recipe-format">
+              <span className="summarize-recipe-format-label">Output format:</span>
+              <button
+                className={`summarize-recipe-format-btn${recipeFormat === 'markdown' ? ' active' : ''}`}
+                onClick={() => setRecipeFormat('markdown')}
+                disabled={isRunning}
+              >
+                Markdown
+              </button>
+              <button
+                className={`summarize-recipe-format-btn${recipeFormat === 'jsonld' ? ' active' : ''}`}
+                onClick={() => setRecipeFormat('jsonld')}
+                disabled={isRunning}
+              >
+                <FileJson size={13} aria-hidden="true" />
+                JSON-LD
+              </button>
+            </div>
+          )}
+
           <button
             className="summarize-submit-btn"
             onClick={handleSubmit}
@@ -874,7 +964,8 @@ export default function Summarize() {
               </h2>
               {view === 'done' && (
                 <div className="summarize-result-actions">
-                  {mode !== 'mind_map' && (
+                  {/* Markdown toggle — not for mind_map or JSON-LD output */}
+                  {mode !== 'mind_map' && submittedModeRef.current !== 'recipe_jsonld' && (
                     <button
                       className={`summarize-action-btn${renderMarkdown ? ' active' : ''}`}
                       onClick={() => setRenderMarkdown(r => !r)}
@@ -903,7 +994,8 @@ export default function Summarize() {
                     <Copy size={14} aria-hidden="true" />
                     {isCopied ? 'Copied!' : 'Copy'}
                   </button>
-                  {ttsEnabled && (
+                  {/* TTS — not for JSON-LD output */}
+                  {ttsEnabled && submittedModeRef.current !== 'recipe_jsonld' && (
                     <button
                       className="summarize-action-btn"
                       onClick={() => handleReadAloud(result, 'result')}
@@ -925,7 +1017,8 @@ export default function Summarize() {
                       .svg
                     </button>
                   )}
-                  {mode !== 'mind_map' && (
+                  {/* Download buttons for non-JSON output */}
+                  {mode !== 'mind_map' && submittedModeRef.current !== 'recipe_jsonld' && (
                     <>
                       <button className="summarize-action-btn" onClick={() => downloadResult('txt')}>
                         <Download size={14} aria-hidden="true" />
@@ -936,6 +1029,45 @@ export default function Summarize() {
                         .md
                       </button>
                     </>
+                  )}
+                  {/* JSON-LD download for direct JSON output */}
+                  {submittedModeRef.current === 'recipe_jsonld' && (
+                    <button className="summarize-action-btn" onClick={downloadJsonLD}>
+                      <Download size={14} aria-hidden="true" />
+                      .json
+                    </button>
+                  )}
+                  {/* Export to JSON-LD button — shown when recipe markdown was generated */}
+                  {submittedModeRef.current === 'recipe' && (
+                    modeCache.recipe_jsonld ? (
+                      <>
+                        <button
+                          className={`summarize-action-btn${jsonLdCopied ? ' copied' : ''}`}
+                          onClick={copyJsonLD}
+                          title="Copy JSON-LD"
+                        >
+                          <FileJson size={14} aria-hidden="true" />
+                          {jsonLdCopied ? 'Copied!' : 'Copy JSON-LD'}
+                        </button>
+                        <button className="summarize-action-btn" onClick={downloadJsonLD}>
+                          <Download size={14} aria-hidden="true" />
+                          .json
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="summarize-action-btn"
+                        onClick={generateJsonLD}
+                        disabled={jsonLdLoading}
+                        title="Generate JSON-LD for Mealie"
+                      >
+                        <FileJson size={14} aria-hidden="true" />
+                        {jsonLdLoading ? 'Generating…' : 'Export JSON-LD'}
+                      </button>
+                    )
+                  )}
+                  {jsonLdError && (
+                    <span className="summarize-jsonld-error" role="alert">{jsonLdError}</span>
                   )}
                   <button className="summarize-action-btn summarize-action-btn--ghost" onClick={reset}>
                     <RotateCcw size={14} aria-hidden="true" />

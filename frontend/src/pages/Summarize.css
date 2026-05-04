@@ -1085,3 +1085,64 @@ details[open] .summarize-reasoning-summary::before {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* ── Recipe Format Toggle ────────────────────────────────────────────────── */
+
+.summarize-recipe-format {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.summarize-recipe-format-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+.summarize-recipe-format-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.summarize-recipe-format-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.summarize-recipe-format-btn.active {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+
+.summarize-recipe-format-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.summarize-recipe-format-btn svg {
+  flex-shrink: 0;
+}
+
+/* JSON-LD error in action bar */
+.summarize-jsonld-error {
+  color: var(--danger);
+  font-size: 0.75rem;
+  margin-left: 4px;
+}

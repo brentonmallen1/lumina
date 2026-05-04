@@ -37,7 +37,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import db
 from db import init_db, get_all_settings, update_settings as db_update_settings
 from llm import OllamaClient
-from llm.prompts import get_prompt
+from llm.prompts import get_prompt, RECIPE_JSONLD_PROMPT
 from transcriber import load_engine
 from audio import AudioPipeline, EnhancementOptions, get_model_status, download_model
 
@@ -1178,6 +1178,87 @@ async def summarize_image(
             tmp.unlink(missing_ok=True)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+# ── Recipe JSON-LD Export ─────────────────────────────────────────────────
+
+from typing import Optional
+from pydantic import Field
+
+
+class HowToStep(BaseModel):
+    type: str = Field(default="HowToStep", alias="@type")
+    text: str
+
+    class Config:
+        populate_by_name = True
+
+
+class RecipeJsonLD(BaseModel):
+    context: str = Field(default="https://schema.org", alias="@context")
+    type: str = Field(default="Recipe", alias="@type")
+    name: str
+    description: Optional[str] = ""
+    prepTime: Optional[str] = None
+    cookTime: Optional[str] = None
+    totalTime: Optional[str] = None
+    recipeYield: Optional[str] = None
+    recipeIngredient: list[str] = []
+    recipeInstructions: list[HowToStep] = []
+
+    class Config:
+        populate_by_name = True
+
+
+class RecipeJsonLDRequest(BaseModel):
+    recipe_markdown: str
+
+
+def _extract_json(text: str) -> str:
+    """Extract JSON from LLM response, handling markdown code blocks."""
+    import re
+    match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+    if match:
+        return match.group(1).strip()
+    start = text.find('{')
+    end = text.rfind('}') + 1
+    if start != -1 and end > start:
+        return text[start:end]
+    return text.strip()
+
+
+@app.post("/api/recipe/jsonld")
+async def convert_recipe_to_jsonld(req: RecipeJsonLDRequest, _: bool = Depends(verify_auth)):
+    """
+    Convert recipe markdown to schema.org/Recipe JSON-LD format.
+    Uses LLM to parse the markdown and returns validated JSON.
+    """
+    model = _settings.get("ollama_model", "")
+    if not model:
+        raise HTTPException(status_code=400, detail="No Ollama model configured")
+
+    prompt = RECIPE_JSONLD_PROMPT["template"].format(content=req.recipe_markdown)
+    system = RECIPE_JSONLD_PROMPT["system"]
+
+    client = _ollama_client()
+    try:
+        raw_response = await client.generate(
+            prompt=prompt,
+            model=model,
+            system=system,
+            thinking_enabled=False,
+        )
+
+        json_str = _extract_json(raw_response)
+        data = json.loads(json_str)
+
+        validated = RecipeJsonLD(**data)
+        return validated.model_dump(by_alias=True)
+
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="LLM did not return valid JSON")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid recipe structure: {exc}")
 
 
 # ── Transcription ──────────────────────────────────────────────────────────

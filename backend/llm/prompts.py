@@ -172,6 +172,37 @@ PROMPTS: dict[str, dict[str, str]] = {
             "{content}"
         ),
     },
+    "recipe_jsonld": {
+        "name": "Recipe (JSON-LD)",
+        "system": (
+            "You extract recipes and output them as schema.org/Recipe JSON-LD. "
+            "Output ONLY valid JSON — no markdown code blocks, no explanation. "
+            "Be precise about quantities, temperatures, and timings. "
+            "Use ISO 8601 duration format for times (e.g., PT15M for 15 minutes, PT1H for 1 hour)."
+        ),
+        "template": (
+            "Extract the recipe from the following content and output it as schema.org/Recipe JSON-LD.\n\n"
+            "Look for recipe data in these places (in order of priority):\n"
+            "1. 'Structured data (schema.org)' section — authoritative ingredients/instructions from the webpage\n"
+            "2. 'Source description' — video description may contain the official ingredients list\n"
+            "3. Main content/transcript — spoken or written recipe details\n\n"
+            "Output a single JSON object with these exact fields:\n"
+            '- "@context": "https://schema.org"\n'
+            '- "@type": "Recipe"\n'
+            '- "name": recipe title (string)\n'
+            '- "description": 1-2 sentence description (string)\n'
+            '- "prepTime": ISO 8601 duration like "PT15M" (string or null)\n'
+            '- "cookTime": ISO 8601 duration like "PT1H" (string or null)\n'
+            '- "totalTime": sum of prep + cook time (string or null)\n'
+            '- "recipeYield": servings like "4 servings" (string or null)\n'
+            '- "recipeIngredient": array of ingredient strings\n'
+            '- "recipeInstructions": array of {{"@type": "HowToStep", "text": "..."}}\n\n'
+            "If the content does not contain a recipe, output: "
+            '{{"@context": "https://schema.org", "@type": "Recipe", "name": "No recipe detected", "description": "No recipe was found in this content.", "recipeIngredient": [], "recipeInstructions": []}}\n\n'
+            "Output ONLY the JSON object, nothing else.\n\n"
+            "{content}"
+        ),
+    },
     "meeting_minutes": {
         "name": "Meeting Minutes",
         "system": (
@@ -201,6 +232,33 @@ PROMPTS: dict[str, dict[str, str]] = {
 }
 
 AVAILABLE_MODES = list(PROMPTS.keys())
+
+
+# ── Recipe JSON-LD conversion prompt (not a summarization mode) ────────────
+
+RECIPE_JSONLD_PROMPT = {
+    "system": (
+        "You are a JSON converter. Convert recipe data to schema.org/Recipe JSON-LD format. "
+        "Output ONLY valid JSON — no markdown code blocks, no explanation."
+    ),
+    "template": """Convert this recipe to schema.org/Recipe JSON-LD format:
+
+{content}
+
+Output a single JSON object with these exact fields:
+- "@context": "https://schema.org"
+- "@type": "Recipe"
+- "name": recipe title (string)
+- "description": 1-2 sentence description (string)
+- "prepTime": ISO 8601 duration like "PT15M" (string or null)
+- "cookTime": ISO 8601 duration like "PT1H" (string or null)
+- "totalTime": sum of prep + cook time (string or null)
+- "recipeYield": servings like "4 servings" (string or null)
+- "recipeIngredient": array of ingredient strings
+- "recipeInstructions": array of {{"@type": "HowToStep", "text": "..."}}
+
+Output ONLY the JSON object.""",
+}
 
 
 def get_prompt(mode: str) -> dict[str, str]:
