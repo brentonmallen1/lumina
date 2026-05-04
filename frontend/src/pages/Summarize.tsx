@@ -210,7 +210,7 @@ export default function Summarize() {
   const translateAccumRef = useRef('');
 
   // ── Recipe format state ────────────────────────────────────────────────────
-  const [recipeFormat,  setRecipeFormat]  = useState<'markdown' | 'jsonld'>('markdown');
+  const [recipeFormat,  setRecipeFormat]  = useState<'markdown' | 'jsonld'>('jsonld');
   const [jsonLdLoading, setJsonLdLoading] = useState(false);
   const [jsonLdError,   setJsonLdError]   = useState('');
   const [jsonLdCopied,  setJsonLdCopied]  = useState(false);
@@ -907,19 +907,19 @@ export default function Summarize() {
             <div className="summarize-recipe-format">
               <span className="summarize-recipe-format-label">Output format:</span>
               <button
-                className={`summarize-recipe-format-btn${recipeFormat === 'markdown' ? ' active' : ''}`}
-                onClick={() => setRecipeFormat('markdown')}
-                disabled={isRunning}
-              >
-                Markdown
-              </button>
-              <button
                 className={`summarize-recipe-format-btn${recipeFormat === 'jsonld' ? ' active' : ''}`}
                 onClick={() => setRecipeFormat('jsonld')}
                 disabled={isRunning}
               >
                 <FileJson size={13} aria-hidden="true" />
                 JSON-LD
+              </button>
+              <button
+                className={`summarize-recipe-format-btn${recipeFormat === 'markdown' ? ' active' : ''}`}
+                onClick={() => setRecipeFormat('markdown')}
+                disabled={isRunning}
+              >
+                Markdown
               </button>
             </div>
           )}

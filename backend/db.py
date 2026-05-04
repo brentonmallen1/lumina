@@ -347,12 +347,16 @@ def delete_prompt(prompt_id: str) -> bool:
     return True
 
 
+INTERNAL_MODES = {"recipe_jsonld"}
+
 def seed_default_prompts() -> None:
     """Upsert built-in prompts: insert new ones, update changed ones."""
     from llm.prompts import PROMPTS  # local import to avoid circular dependency
     with _lock:
         conn = _connect()
         for mode, data in PROMPTS.items():
+            if mode in INTERNAL_MODES:
+                continue
             existing = conn.execute(
                 "SELECT id FROM prompts WHERE mode = ? AND is_default = 1",
                 (mode,),
@@ -371,6 +375,8 @@ def seed_default_prompts() -> None:
                        VALUES (?, ?, ?, ?, ?, 1)""",
                     (str(uuid.uuid4()), data["name"], mode, data["system"], data["template"]),
                 )
+        for mode in INTERNAL_MODES:
+            conn.execute("DELETE FROM prompts WHERE mode = ? AND is_default = 1", (mode,))
         conn.commit()
         conn.close()
 
@@ -569,6 +575,8 @@ def reset_default_prompts() -> None:
     with _lock:
         conn = _connect()
         for mode, data in PROMPTS.items():
+            if mode in INTERNAL_MODES:
+                continue
             conn.execute(
                 """UPDATE prompts
                    SET name = ?, system_prompt = ?, template = ?, updated_at = datetime('now')
