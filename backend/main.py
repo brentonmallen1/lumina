@@ -436,6 +436,18 @@ async def ollama_models(_: bool = Depends(verify_auth)):
     return {"models": models}
 
 
+@app.get("/api/ollama/model/{name:path}")
+async def ollama_model_info(name: str, _: bool = Depends(verify_auth)):
+    """
+    Get detailed info for a specific model including context_length.
+    Returns {context_length, parameter_size} or 404 if not found.
+    """
+    info = await _ollama_client().get_model_info(name)
+    if not info:
+        raise HTTPException(status_code=404, detail="Model not found")
+    return info
+
+
 # ── Prompts ────────────────────────────────────────────────────────────────
 
 class PromptCreate(BaseModel):
@@ -812,6 +824,8 @@ async def chat_endpoint(req: ChatRequest, _: bool = Depends(verify_auth)):
             yield "data: [DONE]\n\n"
             return
 
+        ctx_size = int(_settings.get("ollama_context_size", "32768"))
+
         system_prompt, was_truncated = build_system_prompt(req.content)
         if was_truncated:
             yield f"data: {json.dumps({'notice': 'The source content was truncated to fit the context window.'})}\n\n"
@@ -830,7 +844,7 @@ async def chat_endpoint(req: ChatRequest, _: bool = Depends(verify_auth)):
             yield f"data: {json.dumps({'notice': compression_notice})}\n\n"
 
         try:
-            async for chunk in client.chat_stream(messages, model):
+            async for chunk in client.chat_stream(messages, model, num_ctx=ctx_size):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
@@ -886,12 +900,19 @@ async def _llm_summarize_sse(content: str, mode: str, model_override: str | None
     system      = prompt_data["system"]
     thinking    = _settings.get("ollama_thinking_enabled", "true") == "true"
     budget      = int(_settings.get("ollama_token_budget", "280"))
+    ctx_size    = int(_settings.get("ollama_context_size", "32768"))
+
+    # Estimate tokens (~4 chars/token) and warn if likely to exceed context
+    est_tokens = (len(prompt) + len(system or "")) // 4
+    if est_tokens > ctx_size * 0.9:
+        yield f"data: {json.dumps({'warning': f'Content is large (~{est_tokens:,} tokens). Output may be truncated. Context limit: {ctx_size:,} tokens.'})}\n\n"
 
     try:
         async for chunk in _ollama_client().generate_stream(
             prompt, model, system,
             thinking_enabled=thinking,
             token_budget=budget,
+            num_ctx=ctx_size,
         ):
             yield f"data: {json.dumps({'text': chunk})}\n\n"
     except Exception as exc:
@@ -1101,6 +1122,7 @@ async def _llm_summarize_image_sse(b64: str, mode: str, model_override: str | No
     system   = prompt_data["system"]
     thinking = _settings.get("ollama_thinking_enabled", "true") == "true"
     budget   = int(_settings.get("ollama_token_budget", "280"))
+    ctx_size = int(_settings.get("ollama_context_size", "32768"))
 
     try:
         async for chunk in _ollama_client().generate_stream(
@@ -1108,6 +1130,7 @@ async def _llm_summarize_image_sse(b64: str, mode: str, model_override: str | No
             images=[b64],
             thinking_enabled=thinking,
             token_budget=budget,
+            num_ctx=ctx_size,
         ):
             yield f"data: {json.dumps({'text': chunk})}\n\n"
     except Exception as exc:

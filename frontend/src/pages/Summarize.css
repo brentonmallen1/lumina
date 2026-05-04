@@ -317,6 +317,18 @@
   flex-wrap: wrap;
 }
 
+/* ── Warning ──────────────────────────────────────────────────────────── */
+.summarize-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  background: var(--accent-subtle);
+  border-bottom: 1px solid var(--accent);
+  color: var(--accent-hover);
+  font-size: 0.82rem;
+}
+
 /* ── Output text ──────────────────────────────────────────────────────── */
 .summarize-output {
   padding: 20px;

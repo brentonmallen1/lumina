@@ -233,6 +233,7 @@ export default function Settings() {
       setRestartRequired(res.restart_required);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+      window.dispatchEvent(new CustomEvent('settings-changed', { detail: res.settings }));
     } catch (err) {
       setError((err as Error).message);
     } finally {

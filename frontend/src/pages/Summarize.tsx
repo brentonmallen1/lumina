@@ -160,6 +160,7 @@ export default function Summarize() {
   const [view,      setView]      = useState<ViewState>('idle');
   const [result,    setResult]    = useState('');
   const [errorMsg,  setErrorMsg]  = useState('');
+  const [warningMsg, setWarningMsg] = useState('');
   const [statusDetail, setStatusDetail] = useState('');
   const [isCopied,       setIsCopied]       = useState(false);
   const [reasoning,      setReasoning]      = useState('');
@@ -386,6 +387,7 @@ export default function Summarize() {
     setView('thinking');
     setResult('');
     setErrorMsg('');
+    setWarningMsg('');
     setStatusDetail('');
     setReasoning('');
     rawBufferRef.current       = '';
@@ -401,6 +403,7 @@ export default function Summarize() {
     };
     const onChunk = (chunk: string) => processChunk(chunk);
     const onError = (msg: string) => { setErrorMsg(msg); setView('error'); };
+    const onWarning = (msg: string) => setWarningMsg(msg);
     const onDone  = () => {
       setView(v => v === 'error' ? v : 'done');
       const finalResult   = resultAccumRef.current;
@@ -500,7 +503,7 @@ export default function Summarize() {
         const key = `youtube:${youtubeUrl.trim()}`;
         await tryFromCache(key, () =>
           api.summarizeUrl(youtubeUrl.trim(), 'youtube', mode, preferCaptions, onPhase, onChunk, onError, onDone,
-            withCaching(key, youtubeUrl.trim(), 'youtube', onExtracted))
+            withCaching(key, youtubeUrl.trim(), 'youtube', onExtracted), onWarning)
         );
         break;
       }
@@ -509,7 +512,7 @@ export default function Summarize() {
         const key = `url:${urlInput.trim()}`;
         await tryFromCache(key, () =>
           api.summarizeUrl(urlInput.trim(), 'url', mode, false, onPhase, onChunk, onError, onDone,
-            withCaching(key, urlInput.trim(), 'url', onExtracted))
+            withCaching(key, urlInput.trim(), 'url', onExtracted), onWarning)
         );
         break;
       }
@@ -958,6 +961,14 @@ export default function Summarize() {
                 <AlertTriangle size={16} aria-hidden="true" />
                 <span>{errorMsg}</span>
                 <button className="summarize-action-btn" onClick={reset}>Try again</button>
+              </div>
+            )}
+
+            {/* Warning */}
+            {warningMsg && view !== 'error' && (
+              <div className="summarize-warning" role="alert">
+                <AlertTriangle size={16} aria-hidden="true" />
+                <span>{warningMsg}</span>
               </div>
             )}
 

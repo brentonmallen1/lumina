@@ -76,6 +76,25 @@ class OllamaClient:
             })
         return models
 
+    async def get_model_info(self, model: str) -> dict | None:
+        """
+        Fetch detailed model info including context_length via /api/show.
+        Returns {context_length, parameter_size} or None if unavailable.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.post(f"{self.base_url}/api/show", json={"name": model})
+                r.raise_for_status()
+                data = r.json()
+                model_info = data.get("model_info", {})
+                ctx_key = next((k for k in model_info if "context_length" in k), None)
+                return {
+                    "context_length": model_info.get(ctx_key) if ctx_key else None,
+                    "parameter_size": data.get("details", {}).get("parameter_size"),
+                }
+        except Exception:
+            return None
+
     # ── Generation ─────────────────────────────────────────────────────────────
 
     async def generate(
@@ -173,6 +192,7 @@ class OllamaClient:
         self,
         messages: list[dict],
         model: str,
+        num_ctx: int | None = None,
     ) -> AsyncIterator[str]:
         """
         Multi-turn streaming chat via /api/chat.
@@ -184,7 +204,7 @@ class OllamaClient:
             "model":    model,
             "messages": messages,
             "stream":   True,
-            "options":  _build_options(token_budget=280, num_ctx=None),
+            "options":  _build_options(token_budget=280, num_ctx=num_ctx),
         }
 
         async with httpx.AsyncClient(timeout=None) as client:

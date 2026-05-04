@@ -135,6 +135,10 @@ export function getOllamaModels(): Promise<{ models: OllamaModel[] }> {
   return request('/api/ollama/models');
 }
 
+export function getOllamaModelInfo(name: string): Promise<{ context_length: number | null; parameter_size: string | null }> {
+  return request(`/api/ollama/model/${encodeURIComponent(name)}`);
+}
+
 // ── Prompts ────────────────────────────────────────────────────────────────
 
 export function getPrompts(): Promise<Prompt[]> {
@@ -531,6 +535,7 @@ export async function synthesizeSpeech(text: string, voice?: string): Promise<Bl
  * Event shapes emitted by the backend:
  *   {"phase": "extracting"|"transcribing", "detail": "..."}  — extraction progress
  *   {"extracted_content": "...", "content_truncated": bool}   — source text after extraction (truncated if >32KB)
+ *   {"warning": "...message..."}                              — non-fatal warning
  *   {"text": "...chunk..."}                                    — LLM output chunk
  *   {"error": "...message..."}                                — terminal error
  *   [DONE]                                                    — end of stream
@@ -542,6 +547,7 @@ async function consumeSSE(
   onError: (message: string) => void,
   onDone: () => void,
   onExtracted?: (content: string, truncated: boolean) => void,
+  onWarning?: (message: string) => void,
 ): Promise<void> {
   const reader  = res.body!.getReader();
   const decoder = new TextDecoder();
@@ -565,6 +571,7 @@ async function consumeSSE(
           if (ev.error)             { onError(ev.error); return; }
           if (ev.phase)             { onPhase(ev.phase, ev.detail ?? ''); continue; }
           if (ev.extracted_content) { onExtracted?.(ev.extracted_content, ev.content_truncated ?? false); continue; }
+          if (ev.warning)           { onWarning?.(ev.warning); continue; }
           if (ev.text)              { onChunk(ev.text); }
         } catch { /* partial / malformed line — skip */ }
       }
@@ -694,6 +701,7 @@ export async function summarizeUrl(
   onError: (message: string) => void,
   onDone: () => void,
   onExtracted?: (content: string, truncated: boolean) => void,
+  onWarning?: (message: string) => void,
 ): Promise<void> {
   let res: Response;
   try {
@@ -711,7 +719,7 @@ export async function summarizeUrl(
     onError(body.detail ?? res.statusText);
     return;
   }
-  await consumeSSE(res, onPhase, onChunk, onError, onDone, onExtracted);
+  await consumeSSE(res, onPhase, onChunk, onError, onDone, onExtracted, onWarning);
 }
 
 // ── Chat ───────────────────────────────────────────────────────────────────

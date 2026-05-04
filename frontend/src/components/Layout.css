@@ -57,6 +57,9 @@
 }
 
 .layout-model {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 0.7rem;
   font-weight: 500;
   color: var(--text-muted);
@@ -64,10 +67,18 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 3px 8px;
-  max-width: 140px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.layout-model-ctx {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
 }
 
 @media (max-width: 500px) {

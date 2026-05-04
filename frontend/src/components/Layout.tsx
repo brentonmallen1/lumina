@@ -5,18 +5,43 @@ import { useTheme } from '../hooks/useTheme';
 import * as api from '../api/client';
 import './Layout.css';
 
+function formatContextSize(size: number): string {
+  if (size >= 1000) return `${Math.round(size / 1000)}k`;
+  return String(size);
+}
+
 export default function Layout() {
   const location = useLocation();
   const isSettings = location.pathname === '/settings';
   const isHistory  = location.pathname === '/history';
   const { isDark, toggle } = useTheme();
   const [model, setModel] = useState<string | null>(null);
+  const [contextSize, setContextSize] = useState<number | null>(null);
 
   useEffect(() => {
     api.getSettings().then(s => {
-      if (s.ollama_model) setModel(s.ollama_model);
+      if (s.ollama_model) {
+        setModel(s.ollama_model);
+        fetchContextSize(s.ollama_model, s.ollama_context_size);
+      }
     }).catch(() => {});
+
+    const handleSettingsChanged = (e: Event) => {
+      const settings = (e as CustomEvent).detail;
+      if (settings?.ollama_model) {
+        setModel(settings.ollama_model);
+        fetchContextSize(settings.ollama_model, settings.ollama_context_size);
+      }
+    };
+    window.addEventListener('settings-changed', handleSettingsChanged);
+    return () => window.removeEventListener('settings-changed', handleSettingsChanged);
   }, []);
+
+  const fetchContextSize = async (modelName: string, configuredSize?: string) => {
+    if (configuredSize) {
+      setContextSize(parseInt(configuredSize, 10));
+    }
+  };
 
   return (
     <div className="layout">
@@ -29,8 +54,9 @@ export default function Layout() {
             <span className="layout-brand-name">Lumina</span>
           </Link>
           {model && (
-            <span className="layout-model" title={`LLM: ${model}`}>
+            <span className="layout-model" title={`LLM: ${model}${contextSize ? ` (${formatContextSize(contextSize)} context)` : ''}`}>
               {model}
+              {contextSize && <span className="layout-model-ctx">{formatContextSize(contextSize)}</span>}
             </span>
           )}
         </div>

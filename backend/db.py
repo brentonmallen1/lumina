@@ -44,6 +44,7 @@ _DEFAULTS: dict[str, str] = {
     "ollama_timeout":          os.getenv("OLLAMA_TIMEOUT", "120"),
     "ollama_thinking_enabled": os.getenv("OLLAMA_THINKING_ENABLED", "true"),
     "ollama_token_budget":     os.getenv("OLLAMA_TOKEN_BUDGET", "280"),
+    "ollama_context_size":     os.getenv("OLLAMA_CONTEXT_SIZE", "32768"),
     # Audio enhancement defaults (per-job UI pre-populates from these)
     "enhance_normalize": os.getenv("ENHANCE_NORMALIZE", "false"),
     "enhance_denoise":   os.getenv("ENHANCE_DENOISE",   "false"),
