@@ -61,6 +61,7 @@ export interface Settings {
   ollama_timeout: string;
   ollama_thinking_enabled: string;
   ollama_token_budget: string;
+  ollama_context_size: string;
   // Enhancement defaults
   enhance_normalize: string;
   enhance_denoise: string;

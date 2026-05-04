@@ -22,7 +22,7 @@ export default function Layout() {
     api.getSettings().then(s => {
       if (s.ollama_model) {
         setModel(s.ollama_model);
-        fetchContextSize(s.ollama_model, s.ollama_context_size);
+        fetchContextSize(s.ollama_context_size);
       }
     }).catch(() => {});
 
@@ -30,14 +30,14 @@ export default function Layout() {
       const settings = (e as CustomEvent).detail;
       if (settings?.ollama_model) {
         setModel(settings.ollama_model);
-        fetchContextSize(settings.ollama_model, settings.ollama_context_size);
+        fetchContextSize(settings.ollama_context_size);
       }
     };
     window.addEventListener('settings-changed', handleSettingsChanged);
     return () => window.removeEventListener('settings-changed', handleSettingsChanged);
   }, []);
 
-  const fetchContextSize = async (modelName: string, configuredSize?: string) => {
+  const fetchContextSize = (configuredSize?: string) => {
     if (configuredSize) {
       setContextSize(parseInt(configuredSize, 10));
     }
