@@ -6,8 +6,9 @@ import {
   AlertTriangle, Upload, X, Code, MessageSquare, Send, Trash2, Languages,
   Volume2, Loader, FileJson,
 } from 'lucide-react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import * as api from '../api/client';
+import { useJobs } from '../context/JobContext';
 import type { AudioModelMap, ChatMessage, EnhancementOptions } from '../types';
 import EnhancementPanel, { DEFAULT_ENHANCEMENT } from '../components/EnhancementPanel';
 import MindMapDiagram from '../components/MindMapDiagram';
@@ -147,6 +148,8 @@ function DropZone({ accept, file, onFile, label, hint, icon: Icon, disabled, max
 
 export default function Summarize() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { submitJob } = useJobs();
   const sourceCache = useSourceCache();
 
   // ── Common state ──────────────────────────────────────────────────────────
@@ -568,21 +571,37 @@ export default function Summarize() {
       }
 
       case 'youtube': {
-        const key = `youtube:${youtubeUrl.trim()}`;
-        await tryFromCache(key, () =>
-          api.summarizeUrl(youtubeUrl.trim(), 'youtube', effectiveMode, preferCaptions, onPhase, onChunk, onError, onDone,
-            withCaching(key, youtubeUrl.trim(), 'youtube', onExtracted), onWarning)
-        );
-        break;
+        const url = youtubeUrl.trim();
+        try {
+          const job = await submitJob({
+            job_type: 'summarize',
+            source_type: 'youtube',
+            source_ref: url,
+            source_title: url,
+            config: { mode: effectiveMode, prefer_captions: preferCaptions },
+          });
+          navigate(`/jobs?id=${job.id}`);
+        } catch (err) {
+          onError(err instanceof Error ? err.message : 'Failed to create job');
+        }
+        return;
       }
 
       case 'url': {
-        const key = `url:${urlInput.trim()}`;
-        await tryFromCache(key, () =>
-          api.summarizeUrl(urlInput.trim(), 'url', effectiveMode, false, onPhase, onChunk, onError, onDone,
-            withCaching(key, urlInput.trim(), 'url', onExtracted), onWarning)
-        );
-        break;
+        const url = urlInput.trim();
+        try {
+          const job = await submitJob({
+            job_type: 'summarize',
+            source_type: 'url',
+            source_ref: url,
+            source_title: url,
+            config: { mode: effectiveMode },
+          });
+          navigate(`/jobs?id=${job.id}`);
+        } catch (err) {
+          onError(err instanceof Error ? err.message : 'Failed to create job');
+        }
+        return;
       }
 
       case 'image':

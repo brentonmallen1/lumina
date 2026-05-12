@@ -95,6 +95,32 @@ class OllamaClient:
         except Exception:
             return None
 
+    async def supports_vision(self, model: str, override: bool | None = None) -> bool:
+        """
+        Check if the model supports vision/multimodal inputs.
+
+        Args:
+            model: The model name to check
+            override: If True, always return True. If False, always return False.
+                      If None (default), use heuristic based on model name.
+        """
+        if override is not None:
+            return override
+
+        vision_prefixes = (
+            "llava",
+            "bakllava",
+            "moondream",
+            "gemma3",
+            "gemma4",
+            "minicpm-v",
+            "llama3.2-vision",
+            "qwen2-vl",
+            "qwen2.5-vl",
+        )
+        model_lower = model.lower()
+        return any(model_lower.startswith(prefix) for prefix in vision_prefixes)
+
     # ── Generation ─────────────────────────────────────────────────────────────
 
     async def generate(

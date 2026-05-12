@@ -514,6 +514,26 @@ export default function Settings() {
                     </div>
                   </div>
 
+                  {/* Vision Override */}
+                  <div className="settings-field">
+                    <div className="settings-toggle-row">
+                      <div>
+                        <p className="settings-label" style={{ marginBottom: 2 }}>Force Vision Mode</p>
+                        <p className="settings-label-hint" style={{ margin: 0 }}>
+                          Treat current model as vision-capable. Enable if your model supports images but isn't auto-detected.
+                        </p>
+                      </div>
+                      <button
+                        className={`settings-toggle ${d.ollama_vision_override === 'true' ? 'on' : ''}`}
+                        role="switch"
+                        aria-checked={d.ollama_vision_override === 'true'}
+                        onClick={() => set('ollama_vision_override', d.ollama_vision_override === 'true' ? 'false' : 'true')}
+                      >
+                        <span className="settings-toggle-thumb" />
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Token Budget */}
                   <div className="settings-field">
                     <label className="settings-label" htmlFor="ollama-budget">

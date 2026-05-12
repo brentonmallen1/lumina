@@ -33,6 +33,7 @@ _DEFAULTS: dict[str, str] = {
     # Application
     "max_upload_size_mb":     os.getenv("MAX_UPLOAD_SIZE_MB", "500"),
     "audio_cache_ttl_hours":  os.getenv("AUDIO_CACHE_TTL_HOURS", "72"),
+    "max_concurrent_jobs":    os.getenv("MAX_CONCURRENT_JOBS", "2"),
     # Security
     "auth_enabled":           os.getenv("AUTH_ENABLED", "false"),
     "auth_username":          os.getenv("AUTH_USERNAME", "admin"),
@@ -45,6 +46,7 @@ _DEFAULTS: dict[str, str] = {
     "ollama_thinking_enabled": os.getenv("OLLAMA_THINKING_ENABLED", "true"),
     "ollama_token_budget":     os.getenv("OLLAMA_TOKEN_BUDGET", "280"),
     "ollama_context_size":     os.getenv("OLLAMA_CONTEXT_SIZE", "32768"),
+    "ollama_vision_override":  os.getenv("OLLAMA_VISION_OVERRIDE", "false"),
     # Audio enhancement defaults (per-job UI pre-populates from these)
     "enhance_normalize": os.getenv("ENHANCE_NORMALIZE", "false"),
     "enhance_denoise":   os.getenv("ENHANCE_DENOISE",   "false"),
@@ -138,6 +140,58 @@ def init_db() -> None:
                 FOREIGN KEY (feed_id) REFERENCES feeds(id)
             )
         """)
+        # Jobs table for persistent job queue
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS jobs (
+                id              TEXT PRIMARY KEY,
+                type            TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'pending',
+                status_detail   TEXT DEFAULT '',
+                config          TEXT NOT NULL DEFAULT '{}',
+                source_type     TEXT,
+                source_ref      TEXT,
+                source_title    TEXT,
+                thumbnail       TEXT,
+                content_hash    TEXT,
+                result          TEXT,
+                result_meta     TEXT DEFAULT '{}',
+                error           TEXT,
+                input_file      TEXT,
+                output_file     TEXT,
+                created_at      TEXT DEFAULT (datetime('now')),
+                started_at      TEXT,
+                completed_at    TEXT,
+                expires_at      TEXT,
+                parent_job_id   TEXT,
+                batch_id        TEXT,
+                FOREIGN KEY (parent_job_id) REFERENCES jobs(id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_type ON jobs(type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_job_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_batch ON jobs(batch_id)")
+
+        # Extraction cache for avoiding re-extraction
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS extraction_cache (
+                content_hash    TEXT PRIMARY KEY,
+                source_type     TEXT NOT NULL,
+                source_ref      TEXT NOT NULL,
+                title           TEXT,
+                thumbnail       TEXT,
+                extracted_text  TEXT NOT NULL,
+                metadata        TEXT DEFAULT '{}',
+                created_at      TEXT DEFAULT (datetime('now')),
+                accessed_at     TEXT DEFAULT (datetime('now')),
+                expires_at      TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_source ON extraction_cache(source_type, source_ref)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_accessed ON extraction_cache(accessed_at)")
+
         # FTS5 full-text search index for history
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(
@@ -206,6 +260,13 @@ def _validate_setting(key: str, value: str) -> str | None:
                 return "audio_cache_ttl_hours cannot be negative"
         except ValueError:
             return "audio_cache_ttl_hours must be a number"
+    elif key == "max_concurrent_jobs":
+        try:
+            v = int(value)
+            if v < 1 or v > 10:
+                return "max_concurrent_jobs must be between 1 and 10"
+        except ValueError:
+            return "max_concurrent_jobs must be a number"
     elif key == "ollama_timeout":
         try:
             v = int(value)
@@ -585,3 +646,383 @@ def reset_default_prompts() -> None:
             )
         conn.commit()
         conn.close()
+
+
+# ── Job CRUD ──────────────────────────────────────────────────────────────────
+
+# Valid job statuses and types
+JOB_STATUSES = {"pending", "queued", "running", "done", "error", "cancelled"}
+JOB_TYPES = {"transcribe", "enhance", "extract", "summarize", "download"}
+
+
+def _row_to_job(row: sqlite3.Row) -> dict:
+    """Convert a SQLite row to a job dict with parsed JSON fields."""
+    job = dict(row)
+    job["config"] = json.loads(job.get("config") or "{}")
+    job["result_meta"] = json.loads(job.get("result_meta") or "{}")
+    return job
+
+
+def create_job(
+    job_type: str,
+    config: dict | None = None,
+    source_type: str | None = None,
+    source_ref: str | None = None,
+    source_title: str | None = None,
+    thumbnail: str | None = None,
+    content_hash: str | None = None,
+    input_file: str | None = None,
+    parent_job_id: str | None = None,
+    batch_id: str | None = None,
+) -> dict:
+    """Create a new job in pending status."""
+    job_id = str(uuid.uuid4())
+    config_json = json.dumps(config or {})
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            """INSERT INTO jobs (id, type, status, config, source_type, source_ref,
+                                 source_title, thumbnail, content_hash, input_file,
+                                 parent_job_id, batch_id)
+               VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_id, job_type, config_json, source_type, source_ref, source_title,
+             thumbnail, content_hash, input_file, parent_job_id, batch_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        conn.close()
+    return _row_to_job(row)
+
+
+def get_job(job_id: str) -> dict | None:
+    """Get a job by ID."""
+    with _lock:
+        conn = _connect()
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        conn.close()
+    return _row_to_job(row) if row else None
+
+
+def list_jobs(
+    status: str | list[str] | None = None,
+    job_type: str | None = None,
+    batch_id: str | None = None,
+    limit: int = 50,
+    include_children: bool = False,
+) -> list[dict]:
+    """List jobs with optional filters."""
+    query = "SELECT * FROM jobs WHERE 1=1"
+    params: list = []
+
+    if status:
+        if isinstance(status, str):
+            query += " AND status = ?"
+            params.append(status)
+        else:
+            placeholders = ",".join("?" for _ in status)
+            query += f" AND status IN ({placeholders})"
+            params.extend(status)
+
+    if job_type:
+        query += " AND type = ?"
+        params.append(job_type)
+
+    if batch_id:
+        query += " AND batch_id = ?"
+        params.append(batch_id)
+
+    if not include_children:
+        query += " AND parent_job_id IS NULL"
+
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+
+    with _lock:
+        conn = _connect()
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+    return [_row_to_job(r) for r in rows]
+
+
+def get_jobs_by_status(statuses: list[str]) -> list[dict]:
+    """Get all jobs with any of the given statuses (for worker recovery)."""
+    placeholders = ",".join("?" for _ in statuses)
+    with _lock:
+        conn = _connect()
+        rows = conn.execute(
+            f"SELECT * FROM jobs WHERE status IN ({placeholders}) ORDER BY created_at ASC",
+            statuses,
+        ).fetchall()
+        conn.close()
+    return [_row_to_job(r) for r in rows]
+
+
+def get_child_jobs(parent_job_id: str) -> list[dict]:
+    """Get all child jobs for a parent (chunks)."""
+    with _lock:
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE parent_job_id = ? ORDER BY created_at ASC",
+            (parent_job_id,),
+        ).fetchall()
+        conn.close()
+    return [_row_to_job(r) for r in rows]
+
+
+def update_job_status(
+    job_id: str,
+    status: str,
+    status_detail: str = "",
+    started_at: bool = False,
+) -> dict | None:
+    """Update job status and optional status detail."""
+    if status not in JOB_STATUSES:
+        raise ValueError(f"Invalid status: {status}")
+
+    updates = ["status = ?", "status_detail = ?"]
+    params: list = [status, status_detail]
+
+    if started_at:
+        updates.append("started_at = datetime('now')")
+
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            f"UPDATE jobs SET {', '.join(updates)} WHERE id = ?",
+            params + [job_id],
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        conn.close()
+    return _row_to_job(row) if row else None
+
+
+def complete_job(
+    job_id: str,
+    result: str | None = None,
+    result_meta: dict | None = None,
+    output_file: str | None = None,
+) -> dict | None:
+    """Mark a job as done with its result."""
+    result_meta_json = json.dumps(result_meta or {})
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            """UPDATE jobs
+               SET status = 'done', result = ?, result_meta = ?,
+                   output_file = ?, completed_at = datetime('now')
+               WHERE id = ?""",
+            (result, result_meta_json, output_file, job_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        conn.close()
+    return _row_to_job(row) if row else None
+
+
+def fail_job(job_id: str, error: str) -> dict | None:
+    """Mark a job as failed with an error message."""
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            """UPDATE jobs
+               SET status = 'error', error = ?, completed_at = datetime('now')
+               WHERE id = ?""",
+            (error, job_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        conn.close()
+    return _row_to_job(row) if row else None
+
+
+def cancel_job(job_id: str) -> dict | None:
+    """Mark a job as cancelled."""
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            """UPDATE jobs
+               SET status = 'cancelled', completed_at = datetime('now')
+               WHERE id = ? AND status IN ('pending', 'queued', 'running')""",
+            (job_id,),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        conn.close()
+    return _row_to_job(row) if row else None
+
+
+def cancel_batch(batch_id: str) -> int:
+    """Cancel all pending/queued/running jobs in a batch. Returns count cancelled."""
+    with _lock:
+        conn = _connect()
+        cur = conn.execute(
+            """UPDATE jobs
+               SET status = 'cancelled', completed_at = datetime('now')
+               WHERE batch_id = ? AND status IN ('pending', 'queued', 'running')""",
+            (batch_id,),
+        )
+        conn.commit()
+        count = cur.rowcount
+        conn.close()
+    return count
+
+
+def delete_job(job_id: str) -> bool:
+    """Delete a job (only if done, error, or cancelled)."""
+    with _lock:
+        conn = _connect()
+        cur = conn.execute(
+            "DELETE FROM jobs WHERE id = ? AND status IN ('done', 'error', 'cancelled')",
+            (job_id,),
+        )
+        conn.commit()
+        conn.close()
+    return cur.rowcount > 0
+
+
+def cleanup_old_jobs(hours: int = 72) -> int:
+    """Delete completed/failed jobs older than specified hours. Returns count deleted."""
+    with _lock:
+        conn = _connect()
+        cur = conn.execute(
+            """DELETE FROM jobs
+               WHERE status IN ('done', 'error', 'cancelled')
+               AND completed_at < datetime('now', ?)""",
+            (f"-{hours} hours",),
+        )
+        conn.commit()
+        count = cur.rowcount
+        conn.close()
+    return count
+
+
+def get_job_counts() -> dict[str, int]:
+    """Get counts of jobs by status (for header indicator)."""
+    with _lock:
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT status, COUNT(*) as count FROM jobs GROUP BY status"
+        ).fetchall()
+        conn.close()
+    return {row["status"]: row["count"] for row in rows}
+
+
+def get_active_job_count() -> dict[str, int]:
+    """Get counts of running and queued jobs."""
+    with _lock:
+        conn = _connect()
+        rows = conn.execute(
+            """SELECT status, COUNT(*) as count FROM jobs
+               WHERE status IN ('running', 'queued', 'pending')
+               GROUP BY status"""
+        ).fetchall()
+        conn.close()
+    counts = {row["status"]: row["count"] for row in rows}
+    return {
+        "running": counts.get("running", 0),
+        "queued": counts.get("queued", 0) + counts.get("pending", 0),
+    }
+
+
+# ── Extraction Cache CRUD ─────────────────────────────────────────────────────
+
+def get_extraction_cache(content_hash: str) -> dict | None:
+    """Get cached extraction by content hash. Updates accessed_at on hit."""
+    with _lock:
+        conn = _connect()
+        row = conn.execute(
+            "SELECT * FROM extraction_cache WHERE content_hash = ?",
+            (content_hash,),
+        ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE extraction_cache SET accessed_at = datetime('now') WHERE content_hash = ?",
+                (content_hash,),
+            )
+            conn.commit()
+        conn.close()
+    if not row:
+        return None
+    cache = dict(row)
+    cache["metadata"] = json.loads(cache.get("metadata") or "{}")
+    return cache
+
+
+def set_extraction_cache(
+    content_hash: str,
+    source_type: str,
+    source_ref: str,
+    extracted_text: str,
+    title: str | None = None,
+    thumbnail: str | None = None,
+    metadata: dict | None = None,
+    expires_at: str | None = None,
+) -> dict:
+    """Store extraction in cache (upsert)."""
+    metadata_json = json.dumps(metadata or {})
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            """INSERT OR REPLACE INTO extraction_cache
+               (content_hash, source_type, source_ref, title, thumbnail,
+                extracted_text, metadata, created_at, accessed_at, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?)""",
+            (content_hash, source_type, source_ref, title, thumbnail,
+             extracted_text, metadata_json, expires_at),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM extraction_cache WHERE content_hash = ?",
+            (content_hash,),
+        ).fetchone()
+        conn.close()
+    cache = dict(row)
+    cache["metadata"] = json.loads(cache.get("metadata") or "{}")
+    return cache
+
+
+def delete_extraction_cache(content_hash: str) -> bool:
+    """Delete a cache entry (force refresh)."""
+    with _lock:
+        conn = _connect()
+        cur = conn.execute(
+            "DELETE FROM extraction_cache WHERE content_hash = ?",
+            (content_hash,),
+        )
+        conn.commit()
+        conn.close()
+    return cur.rowcount > 0
+
+
+def cleanup_old_cache(hours: int = 168) -> int:
+    """Delete cache entries not accessed in specified hours. Returns count deleted."""
+    with _lock:
+        conn = _connect()
+        cur = conn.execute(
+            "DELETE FROM extraction_cache WHERE accessed_at < datetime('now', ?)",
+            (f"-{hours} hours",),
+        )
+        conn.commit()
+        count = cur.rowcount
+        conn.close()
+    return count
+
+
+def get_cache_stats() -> dict:
+    """Get cache statistics."""
+    with _lock:
+        conn = _connect()
+        row = conn.execute(
+            """SELECT
+                 COUNT(*) as total_entries,
+                 SUM(LENGTH(extracted_text)) as total_text_bytes,
+                 SUM(LENGTH(thumbnail)) as total_thumbnail_bytes
+               FROM extraction_cache"""
+        ).fetchone()
+        conn.close()
+    return {
+        "total_entries": row["total_entries"] or 0,
+        "total_text_bytes": row["total_text_bytes"] or 0,
+        "total_thumbnail_bytes": row["total_thumbnail_bytes"] or 0,
+    }

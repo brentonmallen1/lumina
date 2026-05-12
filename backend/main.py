@@ -204,8 +204,15 @@ async def lifespan(_: FastAPI):
     import feed_monitor
     feed_monitor.start()
 
+    # Start job worker for persistent job queue
+    from jobs import init_worker, register_handlers, shutdown_worker
+    worker = init_worker()
+    register_handlers(worker)
+    worker.start()
+
     yield
 
+    shutdown_worker()
     feed_monitor.stop()
 
 
@@ -714,7 +721,8 @@ async def tts_download(_: bool = Depends(verify_auth)):
       [DONE]
     """
     async def event_stream():
-        yield f"data: {json.dumps({'status': 'downloading', 'message': 'Downloading Kokoro TTS model\u2026'})}\n\n"
+        msg = {'status': 'downloading', 'message': 'Downloading Kokoro TTS model\u2026'}
+        yield f"data: {json.dumps(msg)}\n\n"
         try:
             await asyncio.to_thread(download_tts_model)
             yield f"data: {json.dumps({'status': 'done', 'message': 'Model ready'})}\n\n"
@@ -921,6 +929,66 @@ async def _llm_summarize_sse(content: str, mode: str, model_override: str | None
     yield "data: [DONE]\n\n"
 
 
+async def _pdf_vision_summarize_sse(file_path: Path, mode: str, model_override: str | None, title: str | None = None):
+    """
+    Vision-based PDF summarization via SSE.
+    Renders PDF pages as images and sends to a vision-capable LLM.
+    Caller should verify model supports vision before calling.
+    """
+    from extractors.pdf import PDFExtractor
+
+    model = model_override or _settings.get("ollama_model", "")
+    if not model:
+        yield f'data: {json.dumps({"error": "No Ollama model configured — go to Settings → Ollama to select one."})}\n\n'
+        yield "data: [DONE]\n\n"
+        return
+
+    yield f"data: {json.dumps({'phase': 'extracting', 'detail': 'Rendering PDF pages for vision model…'})}\n\n"
+
+    extractor = PDFExtractor()
+
+    async def on_status(phase: str, detail: str) -> None:
+        pass
+
+    try:
+        images = await extractor.extract_images(file_path, on_status)
+    except Exception as exc:
+        yield f"data: {json.dumps({'error': f'Failed to render PDF: {exc}'})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    if not images:
+        yield f"data: {json.dumps({'error': 'No pages could be rendered from this PDF.'})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    yield f"data: {json.dumps({'phase': 'thinking', 'detail': f'Analyzing {len(images)} page(s) with vision model…'})}\n\n"
+
+    prompt_data = get_prompt(mode)
+    content_desc = f"[PDF with {len(images)} page(s) attached as images]"
+    if title:
+        content_desc = f"Document title: {title}\n\n{content_desc}"
+    prompt = prompt_data["template"].format(content=content_desc)
+    system = prompt_data["system"]
+    thinking = _settings.get("ollama_thinking_enabled", "true") == "true"
+    budget = int(_settings.get("ollama_token_budget", "280"))
+    ctx_size = int(_settings.get("ollama_context_size", "32768"))
+
+    try:
+        async for chunk in _ollama_client().generate_stream(
+            prompt, model, system,
+            images=images,
+            thinking_enabled=thinking,
+            token_budget=budget,
+            num_ctx=ctx_size,
+        ):
+            yield f"data: {json.dumps({'text': chunk})}\n\n"
+    except Exception as exc:
+        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+    yield "data: [DONE]\n\n"
+
+
 async def _extract_and_summarize_sse(
     extractor,
     source_arg,
@@ -1029,6 +1097,14 @@ async def summarize_file(
     async def event_stream():
         try:
             if source == "pdf":
+                # Vision-first: try multimodal approach if model supports it
+                model = _settings.get("ollama_model", "")
+                vision_override = _settings.get("ollama_vision_override", "false") == "true" or None
+                if model and await _ollama_client().supports_vision(model, override=vision_override):
+                    async for sse_line in _pdf_vision_summarize_sse(tmp, mode, None, title=title):
+                        yield sse_line
+                    return
+                # Fall back to text extraction
                 extractor = PDFExtractor()
             elif source == "audio":
                 if suffix in _VIDEO_EXTENSIONS:
@@ -1383,7 +1459,6 @@ def _sanitize_filename(filename: str) -> str:
 
 @app.post("/api/transcribe")
 async def transcribe(
-    background_tasks: BackgroundTasks,
     file:              UploadFile = File(...),
     enhance_normalize: bool       = Form(False),
     enhance_denoise:   bool       = Form(False),
@@ -1412,12 +1487,15 @@ async def transcribe(
             detail=f"File too large: {size_mb:.1f} MB. Maximum: {max_mb} MB",
         )
 
+    # Generate job ID and save file
     job_id     = str(uuid.uuid4())
-    audio_path = AUDIO_CACHE / f"{job_id}{suffix}"
+    audio_file = f"{job_id}{suffix}"
+    audio_path = AUDIO_CACHE / audio_file
 
     with open(audio_path, "wb") as f:
         f.write(contents)
 
+    # Write sidecar for file metadata (legacy compatibility)
     sidecar = AUDIO_CACHE / f"{job_id}.json"
     sidecar.write_text(json.dumps({
         "job_id":      job_id,
@@ -1427,32 +1505,55 @@ async def transcribe(
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
     }))
 
-    opts = EnhancementOptions(
-        normalize=enhance_normalize,
-        denoise  =enhance_denoise,
-        isolate  =enhance_isolate,
-        separate =enhance_separate,
-        upsample =enhance_upsample,
+    # Create DB job with enhancement config
+    job = db.create_job(
+        job_type="transcribe",
+        config={
+            "enhancement": {
+                "normalize": enhance_normalize,
+                "denoise": enhance_denoise,
+                "isolate": enhance_isolate,
+                "separate": enhance_separate,
+                "upsample": enhance_upsample,
+            },
+        },
+        source_type="file",
+        source_ref=file.filename,
+        source_title=file.filename,
+        input_file=audio_file,
     )
+    job_id = job["id"]
 
-    with _lock:
-        _jobs[job_id] = {
-            "status":        "pending",
-            "status_detail": "",
-            "result":        None,
-            "segments":      [],
-            "language":      "",
-            "error":         None,
-            "filename":      file.filename,
-            "audio_path":    str(audio_path),
-        }
+    # Enqueue to worker
+    from jobs import get_worker
+    worker = get_worker()
+    if worker:
+        worker.enqueue(job_id)
+    else:
+        # Fallback if worker not running (shouldn't happen)
+        db.fail_job(job_id, "Job worker not available")
 
-    background_tasks.add_task(_run_transcription, job_id, audio_path, opts)
     return {"job_id": job_id}
 
 
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str, _: bool = Depends(verify_auth)):
+    # First check DB jobs (new system)
+    db_job = db.get_job(job_id)
+    if db_job:
+        # Map DB job to legacy response format for compatibility
+        return {
+            "status": db_job["status"],
+            "status_detail": db_job.get("status_detail", ""),
+            "result": db_job.get("result"),
+            "segments": db_job.get("result_meta", {}).get("segments", []),
+            "language": db_job.get("result_meta", {}).get("language", ""),
+            "error": db_job.get("error"),
+            "filename": db_job.get("source_title") or db_job.get("source_ref", ""),
+            "audio_path": str(AUDIO_CACHE / db_job["input_file"]) if db_job.get("input_file") else "",
+        }
+
+    # Fall back to in-memory jobs (legacy)
     with _lock:
         job = _jobs.get(job_id)
     if job is None:
@@ -1460,8 +1561,241 @@ async def get_status(job_id: str, _: bool = Depends(verify_auth)):
     return job
 
 
+# ── Job Queue API ─────────────────────────────────────────────────────────────
+
+@app.get("/api/jobs")
+async def list_jobs(
+    status: str | None = Query(None, description="Filter by status"),
+    job_type: str | None = Query(None, alias="type", description="Filter by job type"),
+    batch_id: str | None = Query(None, description="Filter by batch ID"),
+    limit: int = Query(50, ge=1, le=200),
+    _: bool = Depends(verify_auth),
+):
+    """List jobs with optional filters."""
+    status_filter = status.split(",") if status else None
+    jobs = db.list_jobs(
+        status=status_filter,
+        job_type=job_type,
+        batch_id=batch_id,
+        limit=limit,
+    )
+    return {"jobs": jobs}
+
+
+@app.get("/api/jobs/active")
+async def get_active_jobs(_: bool = Depends(verify_auth)):
+    """Get counts of active jobs (for header indicator)."""
+    counts = db.get_active_job_count()
+    return counts
+
+
+@app.get("/api/jobs/{job_id}")
+async def get_job(job_id: str, _: bool = Depends(verify_auth)):
+    """Get a single job by ID."""
+    job = db.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@app.delete("/api/jobs/{job_id}")
+async def cancel_job(job_id: str, _: bool = Depends(verify_auth)):
+    """Cancel a job."""
+    job = db.cancel_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@app.post("/api/jobs/{job_id}/retry")
+async def retry_job(job_id: str, _: bool = Depends(verify_auth)):
+    """Retry a failed or cancelled job."""
+    from jobs import get_worker
+
+    job = db.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job["status"] not in ("error", "cancelled"):
+        raise HTTPException(status_code=400, detail="Can only retry failed or cancelled jobs")
+
+    # Reset job status
+    db.update_job_status(job_id, "pending", "Retrying...")
+
+    # Clear error field
+    with db.get_connection() as conn:
+        conn.execute("UPDATE jobs SET error = NULL, result = NULL WHERE id = ?", (job_id,))
+        conn.commit()
+
+    # Re-enqueue
+    worker = get_worker()
+    if worker:
+        worker.enqueue(job_id)
+    else:
+        db.fail_job(job_id, "Job worker not available")
+
+    return db.get_job(job_id)
+
+
+class CreateJobRequest(BaseModel):
+    job_type: str
+    source_type: str
+    source_ref: str
+    source_title: str | None = None
+    config: dict = {}
+
+
+@app.post("/api/jobs")
+async def create_single_job(
+    request: CreateJobRequest,
+    _: bool = Depends(verify_auth),
+):
+    """Create a single job."""
+    from jobs import get_worker
+
+    job = db.create_job(
+        job_type=request.job_type,
+        config=request.config,
+        source_type=request.source_type,
+        source_ref=request.source_ref,
+        source_title=request.source_title,
+    )
+
+    worker = get_worker()
+    if worker:
+        worker.enqueue(job["id"])
+    else:
+        db.fail_job(job["id"], "Job worker not available")
+
+    return job
+
+
+class BatchJobRequest(BaseModel):
+    urls: list[str]
+    job_type: str = "summarize"
+    config: dict = {}
+
+
+@app.post("/api/jobs/batch")
+async def create_batch_jobs(
+    request: BatchJobRequest,
+    _: bool = Depends(verify_auth),
+):
+    """Create multiple jobs from a list of URLs."""
+    from jobs import get_worker
+
+    if not request.urls:
+        raise HTTPException(status_code=400, detail="No URLs provided")
+
+    batch_id = str(uuid.uuid4())
+    jobs = []
+
+    for url in request.urls:
+        # Determine source type from URL
+        source_type = "url"
+        if "youtube.com" in url or "youtu.be" in url:
+            source_type = "youtube"
+
+        job = db.create_job(
+            job_type=request.job_type,
+            config=request.config,
+            source_type=source_type,
+            source_ref=url,
+            batch_id=batch_id,
+        )
+        jobs.append(job)
+
+        # Enqueue job
+        worker = get_worker()
+        if worker:
+            worker.enqueue(job["id"])
+
+    return {
+        "batch_id": batch_id,
+        "job_count": len(jobs),
+        "jobs": jobs,
+    }
+
+
+@app.delete("/api/jobs/batch/{batch_id}")
+async def cancel_batch(batch_id: str, _: bool = Depends(verify_auth)):
+    """Cancel all jobs in a batch."""
+    count = db.cancel_batch(batch_id)
+    return {"cancelled": count}
+
+
+# ── Extraction Cache API ──────────────────────────────────────────────────────
+
+@app.get("/api/cache/{content_hash}")
+async def get_cache_entry(content_hash: str, _: bool = Depends(verify_auth)):
+    """Check if content is cached."""
+    cache = db.get_extraction_cache(content_hash)
+    if cache is None:
+        raise HTTPException(status_code=404, detail="Cache entry not found")
+    return {
+        "cached": True,
+        "content_hash": cache["content_hash"],
+        "source_type": cache["source_type"],
+        "title": cache.get("title"),
+        "created_at": cache["created_at"],
+        "accessed_at": cache["accessed_at"],
+        "text_length": len(cache.get("extracted_text", "")),
+    }
+
+
+@app.delete("/api/cache/{content_hash}")
+async def invalidate_cache(content_hash: str, _: bool = Depends(verify_auth)):
+    """Delete a cache entry (force refresh)."""
+    deleted = db.delete_extraction_cache(content_hash)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Cache entry not found")
+    return {"deleted": True}
+
+
+@app.get("/api/cache")
+async def get_cache_stats(_: bool = Depends(verify_auth)):
+    """Get cache statistics."""
+    stats = db.get_cache_stats()
+    return stats
+
+
+class CacheLookupRequest(BaseModel):
+    source_type: str
+    source_ref: str
+
+
+@app.post("/api/cache/lookup")
+async def lookup_cache(request: CacheLookupRequest, _: bool = Depends(verify_auth)):
+    """Look up cache by source type and ref (computes hash)."""
+    from jobs import compute_content_hash
+
+    content_hash = compute_content_hash(request.source_type, request.source_ref)
+    cache = db.get_extraction_cache(content_hash)
+
+    if cache is None:
+        return {"cached": False, "content_hash": content_hash}
+
+    return {
+        "cached": True,
+        "content_hash": content_hash,
+        "title": cache.get("title"),
+        "created_at": cache["created_at"],
+        "accessed_at": cache["accessed_at"],
+        "text_length": len(cache.get("extracted_text", "")),
+    }
+
+
 @app.get("/api/audio/{job_id}")
 async def get_audio(job_id: str, _: bool = Depends(verify_auth)):
+    # Check DB jobs first
+    db_job = db.get_job(job_id)
+    if db_job and db_job.get("input_file"):
+        audio_path = AUDIO_CACHE / db_job["input_file"]
+        if audio_path.exists():
+            filename = _sanitize_filename(db_job.get("source_title") or audio_path.name)
+            return FileResponse(audio_path, media_type="audio/mpeg", filename=filename)
+
+    # Fall back to in-memory jobs
     with _lock:
         job = _jobs.get(job_id)
     if job is None:

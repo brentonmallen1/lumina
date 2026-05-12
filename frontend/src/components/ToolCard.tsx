@@ -1,6 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { ArrowRight } from 'lucide-react';
 import './ToolCard.css';
 
 interface ToolCardProps {
@@ -41,15 +40,6 @@ export default function ToolCard({
         <h3 className="tool-card-title">{title}</h3>
         <p className="tool-card-description">{description}</p>
       </div>
-
-      {!comingSoon && href && (
-        <div className="tool-card-footer">
-          <span className="tool-card-cta">
-            Open
-            <ArrowRight size={14} aria-hidden="true" />
-          </span>
-        </div>
-      )}
     </>
   );
 

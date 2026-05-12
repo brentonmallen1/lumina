@@ -129,6 +129,39 @@
   .layout-nav-label { display: none; }
 }
 
+/* ── Jobs indicator ───────────────────────────────────────────────────── */
+.layout-jobs-indicator {
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 0 12px;
+  gap: 6px;
+}
+
+.layout-jobs-indicator:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.layout-jobs-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.layout-jobs-count {
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .layout-jobs-count { display: none; }
+}
+
 /* ── Main content ─────────────────────────────────────────────────────── */
 .layout-main {
   flex: 1;

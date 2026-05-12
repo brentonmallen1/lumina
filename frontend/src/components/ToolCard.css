@@ -117,21 +117,3 @@
   line-height: 1.5;
 }
 
-/* ── Footer CTA ───────────────────────────────────────────────────────── */
-.tool-card-footer {
-  margin-top: 4px;
-}
-
-.tool-card-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--accent);
-}
-
-.tool-card--active:hover .tool-card-cta svg {
-  transform: translateX(2px);
-  transition: transform 0.15s ease;
-}

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { Clock, Settings, Zap, Sun, Moon } from 'lucide-react';
+import { Clock, Settings, Zap, Sun, Moon, Loader, ListTodo } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
+import { useJobs } from '../context/JobContext';
 import * as api from '../api/client';
 import './Layout.css';
 
@@ -14,9 +15,13 @@ export default function Layout() {
   const location = useLocation();
   const isSettings = location.pathname === '/settings';
   const isHistory  = location.pathname === '/history';
+  const isJobs     = location.pathname === '/jobs';
   const { isDark, toggle } = useTheme();
+  const { activeCounts } = useJobs();
   const [model, setModel] = useState<string | null>(null);
   const [contextSize, setContextSize] = useState<number | null>(null);
+
+  const hasActiveJobs = activeCounts.running > 0 || activeCounts.queued > 0;
 
   useEffect(() => {
     api.getSettings().then(s => {
@@ -62,6 +67,27 @@ export default function Layout() {
         </div>
 
         <nav className="layout-nav" aria-label="Global navigation">
+          <Link
+            to="/jobs"
+            className={`layout-nav-btn ${hasActiveJobs ? 'layout-jobs-indicator' : ''} ${isJobs ? 'active' : ''}`}
+            aria-label={hasActiveJobs ? `${activeCounts.running} running, ${activeCounts.queued} queued jobs` : 'Jobs'}
+          >
+            {hasActiveJobs ? (
+              <>
+                <Loader size={18} className="layout-jobs-spinner" aria-hidden="true" />
+                <span className="layout-jobs-count">
+                  {activeCounts.running > 0 && `${activeCounts.running} running`}
+                  {activeCounts.running > 0 && activeCounts.queued > 0 && ' · '}
+                  {activeCounts.queued > 0 && `${activeCounts.queued} queued`}
+                </span>
+              </>
+            ) : (
+              <>
+                <ListTodo size={18} aria-hidden="true" />
+                <span className="layout-nav-label">Jobs</span>
+              </>
+            )}
+          </Link>
           <button
             className="layout-nav-btn"
             onClick={toggle}

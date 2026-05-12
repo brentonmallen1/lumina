@@ -809,3 +809,104 @@ export async function chat(
   }
   onDone();
 }
+
+// ── Persistent Jobs API ────────────────────────────────────────────────────
+
+import type { ActiveJobCounts, CacheEntry, CacheStats, PersistentJob } from '../types';
+
+export interface ListJobsParams {
+  status?: string;
+  type?: string;
+  batch_id?: string;
+  limit?: number;
+}
+
+export function listJobs(params?: ListJobsParams): Promise<{ jobs: PersistentJob[] }> {
+  const query = new URLSearchParams();
+  if (params?.status) query.set('status', params.status);
+  if (params?.type) query.set('type', params.type);
+  if (params?.batch_id) query.set('batch_id', params.batch_id);
+  if (params?.limit) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return request<{ jobs: PersistentJob[] }>(`/api/jobs${qs ? `?${qs}` : ''}`);
+}
+
+export function getJob(jobId: string): Promise<PersistentJob> {
+  return request<PersistentJob>(`/api/jobs/${jobId}`);
+}
+
+export function cancelJob(jobId: string): Promise<PersistentJob> {
+  return request<PersistentJob>(`/api/jobs/${jobId}`, { method: 'DELETE' });
+}
+
+export function retryJob(jobId: string): Promise<PersistentJob> {
+  return request<PersistentJob>(`/api/jobs/${jobId}/retry`, { method: 'POST' });
+}
+
+export function getActiveJobCounts(): Promise<ActiveJobCounts> {
+  return request<ActiveJobCounts>('/api/jobs/active');
+}
+
+export interface CreateJobRequest {
+  job_type: string;
+  source_type: string;
+  source_ref: string;
+  source_title?: string;
+  config?: Record<string, unknown>;
+}
+
+export function createJob(req: CreateJobRequest): Promise<PersistentJob> {
+  return request<PersistentJob>('/api/jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
+
+export interface BatchJobRequest {
+  urls: string[];
+  job_type?: string;
+  config?: Record<string, unknown>;
+}
+
+export function createBatchJobs(req: BatchJobRequest): Promise<{
+  batch_id: string;
+  job_count: number;
+  jobs: PersistentJob[];
+}> {
+  return request<{
+    batch_id: string;
+    job_count: number;
+    jobs: PersistentJob[];
+  }>('/api/jobs/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
+
+export function cancelBatch(batchId: string): Promise<{ cancelled: number }> {
+  return request<{ cancelled: number }>(`/api/jobs/batch/${batchId}`, { method: 'DELETE' });
+}
+
+// ── Extraction Cache API ───────────────────────────────────────────────────
+
+export function getCacheEntry(contentHash: string): Promise<CacheEntry> {
+  return request<CacheEntry>(`/api/cache/${contentHash}`);
+}
+
+export function invalidateCache(contentHash: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/cache/${contentHash}`, { method: 'DELETE' });
+}
+
+export function getCacheStats(): Promise<CacheStats> {
+  return request<CacheStats>('/api/cache');
+}
+
+export function lookupCache(sourceType: string, sourceRef: string): Promise<CacheEntry> {
+  return request<CacheEntry>('/api/cache/lookup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_type: sourceType, source_ref: sourceRef }),
+  });
+}

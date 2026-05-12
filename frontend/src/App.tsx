@@ -12,31 +12,36 @@ import Feeds from './pages/Feeds';
 import Pipeline from './pages/Pipeline';
 import Download from './pages/Download';
 import TTS from './pages/TTS';
+import Jobs from './pages/Jobs';
 import { SourceCacheProvider } from './context/SourceCache';
+import { JobProvider } from './context/JobContext';
 
 export default function App() {
   return (
-    <SourceCacheProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route element={<Layout />}>
-            <Route path="/" element={<Home />} />
-            <Route path="/summarize" element={<Summarize />} />
-            <Route path="/transcribe" element={<Transcribe />} />
-            <Route path="/enhance" element={<Enhance />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/prompts" element={<Prompts />} />
-            <Route path="/history" element={<History />} />
-            <Route path="/batch" element={<Batch />} />
-            <Route path="/feeds" element={<Feeds />} />
-            <Route path="/pipeline" element={<Pipeline />} />
-            <Route path="/download" element={<Download />} />
-            <Route path="/tts" element={<TTS />} />
-            {/* Fallback */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </SourceCacheProvider>
+    <JobProvider>
+      <SourceCacheProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/" element={<Home />} />
+              <Route path="/jobs" element={<Jobs />} />
+              <Route path="/summarize" element={<Summarize />} />
+              <Route path="/transcribe" element={<Transcribe />} />
+              <Route path="/enhance" element={<Enhance />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/prompts" element={<Prompts />} />
+              <Route path="/history" element={<History />} />
+              <Route path="/batch" element={<Batch />} />
+              <Route path="/feeds" element={<Feeds />} />
+              <Route path="/pipeline" element={<Pipeline />} />
+              <Route path="/download" element={<Download />} />
+              <Route path="/tts" element={<TTS />} />
+              {/* Fallback */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </SourceCacheProvider>
+    </JobProvider>
   );
 }

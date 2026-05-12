@@ -12,6 +12,7 @@ import {
   GitBranch,
   Download,
   Volume2,
+  ListTodo,
 } from 'lucide-react';
 import ToolCard from '../components/ToolCard';
 import './Home.css';
@@ -39,9 +40,9 @@ export default function Home() {
           />
         </div>
 
-        {/* Tools grid */}
+        {/* Content Sources */}
         <div className="home-section">
-          <h2 className="home-section-title">Individual Tools</h2>
+          <h2 className="home-section-title">Content Sources</h2>
           <div className="home-grid">
             <ToolCard
               icon={Mic}
@@ -67,17 +68,18 @@ export default function Home() {
               description="Upload a PDF and extract its text content for summarization."
               href="/summarize?tab=pdf"
             />
+          </div>
+        </div>
+
+        {/* Audio Tools */}
+        <div className="home-section">
+          <h2 className="home-section-title">Audio Tools</h2>
+          <div className="home-grid">
             <ToolCard
               icon={AudioWaveform}
               title="Audio Enhance"
               description="Improve audio quality — noise reduction, vocal isolation, super-resolution."
               href="/enhance"
-            />
-            <ToolCard
-              icon={Volume2}
-              title="Text-to-Speech"
-              description="Convert text to natural-sounding speech with Kokoro TTS. Choose from American and British voices."
-              href="/tts"
             />
             <ToolCard
               icon={GitBranch}
@@ -86,22 +88,29 @@ export default function Home() {
               href="/pipeline"
             />
             <ToolCard
+              icon={Volume2}
+              title="Text-to-Speech"
+              description="Convert text to natural-sounding speech with Kokoro TTS."
+              href="/tts"
+            />
+            <ToolCard
               icon={Download}
               title="YouTube Download"
-              description="Download YouTube videos or audio in your preferred format, codec, and quality."
+              description="Download YouTube videos or audio in your preferred format and quality."
               href="/download"
             />
+          </div>
+        </div>
+
+        {/* Automation */}
+        <div className="home-section">
+          <h2 className="home-section-title">Automation</h2>
+          <div className="home-grid">
             <ToolCard
-              icon={Clock}
-              title="History"
-              description="Browse past summarization results — expand any entry to re-read or copy."
-              href="/history"
-            />
-            <ToolCard
-              icon={BookOpen}
-              title="Prompts"
-              description="Manage and customize the AI prompt templates used for each summarization mode."
-              href="/prompts"
+              icon={ListTodo}
+              title="Jobs"
+              description="View and manage all running and completed jobs. Retry failed jobs or submit batches."
+              href="/jobs"
             />
             <ToolCard
               icon={Layers}
@@ -112,8 +121,27 @@ export default function Home() {
             <ToolCard
               icon={Rss}
               title="RSS Monitor"
-              description="Subscribe to RSS or podcast feeds and auto-transcribe new episodes as they arrive."
+              description="Subscribe to RSS or podcast feeds and auto-transcribe new episodes."
               href="/feeds"
+            />
+          </div>
+        </div>
+
+        {/* History & Settings */}
+        <div className="home-section">
+          <h2 className="home-section-title">History & Settings</h2>
+          <div className="home-grid">
+            <ToolCard
+              icon={Clock}
+              title="History"
+              description="Browse past summarization results — expand any entry to re-read or copy."
+              href="/history"
+            />
+            <ToolCard
+              icon={BookOpen}
+              title="Prompts"
+              description="Manage and customize the AI prompt templates for each summarization mode."
+              href="/prompts"
             />
           </div>
         </div>

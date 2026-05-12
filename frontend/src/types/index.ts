@@ -1,5 +1,60 @@
 export type JobStatus = 'pending' | 'enhancing' | 'processing' | 'done' | 'error';
 
+// New persistent job types
+export type PersistentJobStatus = 'pending' | 'queued' | 'running' | 'done' | 'error' | 'cancelled';
+export type PersistentJobType = 'transcribe' | 'enhance' | 'extract' | 'summarize' | 'download';
+
+export interface PersistentJob {
+  id: string;
+  type: PersistentJobType;
+  status: PersistentJobStatus;
+  status_detail: string;
+  config: Record<string, unknown>;
+  source_type: string | null;
+  source_ref: string | null;
+  source_title: string | null;
+  thumbnail: string | null;
+  content_hash: string | null;
+  result: string | null;
+  result_meta: {
+    segments?: Segment[];
+    language?: string;
+    mode?: string;
+    char_count?: number;
+    [key: string]: unknown;
+  };
+  error: string | null;
+  input_file: string | null;
+  output_file: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  expires_at: string | null;
+  parent_job_id: string | null;
+  batch_id: string | null;
+}
+
+export interface ActiveJobCounts {
+  running: number;
+  queued: number;
+}
+
+export interface CacheEntry {
+  cached: boolean;
+  content_hash: string;
+  source_type?: string;
+  title?: string;
+  created_at?: string;
+  accessed_at?: string;
+  text_length?: number;
+}
+
+export interface CacheStats {
+  total_entries: number;
+  total_text_bytes: number;
+  total_thumbnail_bytes: number;
+}
+
 export interface Word {
   word: string;
   start: number;
@@ -62,6 +117,7 @@ export interface Settings {
   ollama_thinking_enabled: string;
   ollama_token_budget: string;
   ollama_context_size: string;
+  ollama_vision_override: string;
   // Enhancement defaults
   enhance_normalize: string;
   enhance_denoise: string;
