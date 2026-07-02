@@ -6,7 +6,7 @@ import {
   AlertTriangle, Upload, X, Code, MessageSquare, Send, Trash2, Languages,
   Volume2, Loader, FileJson,
 } from 'lucide-react';
-import { Link, useSearchParams, useNavigate } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import * as api from '../api/client';
 import { useJobs } from '../context/JobContext';
 import type { AudioModelMap, ChatMessage, EnhancementOptions } from '../types';
@@ -148,7 +148,6 @@ function DropZone({ accept, file, onFile, label, hint, icon: Icon, disabled, max
 
 export default function Summarize() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
   const { submitJob, jobs } = useJobs();
   const sourceCache = useSourceCache();
 
