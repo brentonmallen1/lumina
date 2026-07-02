@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, ListTodo, RefreshCw, Loader, AlertTriangle,
-  Inbox, ChevronDown, ChevronRight, RotateCcw,
+  Inbox, ChevronDown, ChevronRight, RotateCcw, ExternalLink,
 } from 'lucide-react';
 import { useJobs } from '../context/JobContext';
 import type { PersistentJob, PersistentJobStatus, PersistentJobType } from '../types';
@@ -258,6 +258,7 @@ function JobCard({ job, expanded, onClick, onCancel, onRetry, formatTime }: JobC
   const isActive = ['pending', 'queued', 'running'].includes(job.status);
   const canCancel = isActive;
   const canRetry = job.status === 'error' || job.status === 'cancelled';
+  const canOpen = job.status === 'done' && (job.type === 'summarize' || job.type === 'extract');
   const typeIcon = TYPE_ICONS[job.type] || '📋';
 
   return (
@@ -296,6 +297,16 @@ function JobCard({ job, expanded, onClick, onCancel, onRetry, formatTime }: JobC
           </div>
         </div>
         <div className="job-actions">
+          {canOpen && (
+            <Link
+              to={`/summarize?jobId=${job.id}`}
+              className="job-open-btn"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ExternalLink size={14} aria-hidden="true" />
+              Open
+            </Link>
+          )}
           {canRetry && (
             <button className="job-retry-btn" onClick={onRetry}>
               <RotateCcw size={14} aria-hidden="true" />

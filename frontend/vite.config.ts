@@ -15,6 +15,9 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
       },
+      watch: {
+        ignored: ['**/.venv/**', '**/node_modules/**', '**/volumes/**', '**/cache/**'],
+      },
     },
     build: {
       outDir: '../backend/static',

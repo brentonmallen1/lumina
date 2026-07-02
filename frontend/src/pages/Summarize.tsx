@@ -147,10 +147,13 @@ function DropZone({ accept, file, onFile, label, hint, icon: Icon, disabled, max
 // ── Main component ─────────────────────────────────────────────────────────
 
 export default function Summarize() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { submitJob } = useJobs();
+  const { submitJob, jobs } = useJobs();
   const sourceCache = useSourceCache();
+
+  // Pending job tracking for async sources (YouTube, URL)
+  const [pendingJobId, setPendingJobId] = useState<string | null>(null);
 
   // ── Common state ──────────────────────────────────────────────────────────
   const validTabs = SOURCE_TABS.map(t => t.id) as string[];
@@ -238,6 +241,59 @@ export default function Summarize() {
   const rawBufferRef  = useRef('');
   const thinkDoneRef  = useRef(false);
 
+  // Load job data if jobId is in URL (from "Open in Summarize" button)
+  useEffect(() => {
+    const jobId = searchParams.get('jobId');
+    if (!jobId) return;
+
+    api.getJob(jobId).then(job => {
+      if (!job || job.status !== 'done' || !job.result) return;
+
+      // Set the appropriate source tab based on job source_type
+      if (job.source_type === 'youtube') {
+        setSourceTab('youtube');
+        setYoutubeUrl(job.source_ref || '');
+      } else if (job.source_type === 'url') {
+        setSourceTab('url');
+        setUrlInput(job.source_ref || '');
+      }
+
+      if (job.type === 'extract') {
+        // For extract jobs: result IS the extracted text, no summary yet
+        setSourceContent(job.result);
+        setModeCache({ transcript: { result: job.result, reasoning: '' } });
+        setMode('summary');
+        setView('idle');
+      } else {
+        // For summarize jobs: load result and extracted_text
+        const jobMode = (job.config as Record<string, unknown>)?.mode as string || 'summary';
+        const extractedText = (job.result_meta as Record<string, unknown>)?.extracted_text as string | undefined;
+
+        setMode(jobMode);
+        setResult(job.result);
+        resultAccumRef.current = job.result;
+        submittedModeRef.current = jobMode;
+        setView('done');
+        setRenderMarkdown(jobMode !== 'recipe_jsonld');
+
+        // Cache the mode result
+        setModeCache(prev => ({
+          ...prev,
+          [jobMode]: { result: job.result!, reasoning: '' },
+        }));
+
+        // Set source content for chat if extracted text is available
+        if (extractedText) {
+          setSourceContent(extractedText);
+          setModeCache(prev => ({ ...prev, transcript: { result: extractedText, reasoning: '' } }));
+        }
+      }
+
+      // Clear the jobId from URL to avoid reloading on refresh
+      setSearchParams({}, { replace: true });
+    }).catch(() => {});
+  }, [searchParams, setSearchParams]);
+
   // Load audio model status, TTS settings, and prompt modes on mount
   useEffect(() => {
     api.getAudioModels().then(setAudioModels).catch(() => {});
@@ -269,6 +325,69 @@ export default function Summarize() {
     }).catch(() => {});
   }, []);
 
+  // Watch for pending job completion and load result inline
+  useEffect(() => {
+    if (!pendingJobId) return;
+    const job = jobs.find(j => j.id === pendingJobId);
+    if (!job) return;
+
+    // Update status detail while running
+    if (job.status === 'running' && job.status_detail) {
+      setStatusDetail(job.status_detail);
+    }
+
+    // Handle completion
+    if (job.status === 'done' && job.result) {
+      const jobMode = (job.config as Record<string, unknown>)?.mode as string || 'summary';
+      const extractedText = (job.result_meta as Record<string, unknown>)?.extracted_text as string | undefined;
+
+      // Populate result
+      setResult(job.result);
+      resultAccumRef.current = job.result;
+      submittedModeRef.current = jobMode;
+      setView('done');
+      setRenderMarkdown(jobMode !== 'recipe_jsonld');
+
+      // Cache the mode result
+      setModeCache(prev => ({
+        ...prev,
+        [jobMode]: { result: job.result!, reasoning: '' },
+      }));
+
+      // Set source content for chat if extracted text is available
+      if (extractedText) {
+        setSourceContent(extractedText);
+        setModeCache(prev => ({ ...prev, transcript: { result: extractedText, reasoning: '' } }));
+      }
+
+      // Save to history
+      const sourceDetail = job.source_ref || '';
+      api.saveHistory({
+        mode: jobMode,
+        source: job.source_type || 'url',
+        source_detail: sourceDetail,
+        result: job.result,
+        reasoning: '',
+      }).catch(() => {});
+
+      setPendingJobId(null);
+    }
+
+    // Handle error
+    if (job.status === 'error') {
+      setErrorMsg(job.error || 'Job failed');
+      setView('error');
+      setPendingJobId(null);
+    }
+
+    // Handle cancelled
+    if (job.status === 'cancelled') {
+      setErrorMsg('Job was cancelled');
+      setView('error');
+      setPendingJobId(null);
+    }
+  }, [jobs, pendingJobId]);
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   const reset = () => {
@@ -285,6 +404,7 @@ export default function Summarize() {
     setImageFile(null);
     setTranslation('');
     setTranslateState('idle');
+    setPendingJobId(null);
     if (ttsBlobUrlRef.current) { URL.revokeObjectURL(ttsBlobUrlRef.current); ttsBlobUrlRef.current = null; }
     setTtsAudioUrl(null);
     rawBufferRef.current      = '';
@@ -580,7 +700,9 @@ export default function Summarize() {
             source_title: url,
             config: { mode: effectiveMode, prefer_captions: preferCaptions },
           });
-          navigate(`/jobs?id=${job.id}`);
+          setPendingJobId(job.id);
+          setView('extracting');
+          setStatusDetail('Queued for processing…');
         } catch (err) {
           onError(err instanceof Error ? err.message : 'Failed to create job');
         }
@@ -597,7 +719,9 @@ export default function Summarize() {
             source_title: url,
             config: { mode: effectiveMode },
           });
-          navigate(`/jobs?id=${job.id}`);
+          setPendingJobId(job.id);
+          setView('extracting');
+          setStatusDetail('Queued for processing…');
         } catch (err) {
           onError(err instanceof Error ? err.message : 'Failed to create job');
         }

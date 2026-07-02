@@ -65,10 +65,11 @@ download:
 
 # Run only the API server with hot-reload (no model pre-download — use when model already cached)
 # Uses `python -m uvicorn` so reload subprocesses inherit the correct venv Python.
+# Note: --reload-exclude requires absolute paths for directory exclusions to work.
 dev-api:
     cd backend && uv run python -m uvicorn main:app \
         --reload \
-        --reload-exclude '.venv/*' --reload-exclude 'cache/*' --reload-exclude 'data/*' \
+        --reload-exclude "$(pwd)/.venv" --reload-exclude "$(pwd)/cache" --reload-exclude "$(pwd)/data" \
         --log-level warning \
         --port "${APP_PORT:-8080}"
 
@@ -110,9 +111,9 @@ dev:
     export APP_PORT="${APP_PORT:-8080}"
     echo "Starting API server on :${APP_PORT} and Vite dev server on :5173"
 
-    # Start backend first
+    # Start backend first (reload-exclude requires absolute paths)
     (cd backend && exec uv run python -m uvicorn main:app --reload --log-level warning --port "${APP_PORT}" \
-        --reload-exclude '.venv/*' --reload-exclude 'cache/*' --reload-exclude 'data/*') &
+        --reload-exclude "$(pwd)/.venv" --reload-exclude "$(pwd)/cache" --reload-exclude "$(pwd)/data") &
     api_pid=$!
 
     # Wait for backend to be ready before starting frontend
@@ -135,7 +136,7 @@ dev:
 dev-backend: download
     cd backend && uv run python -m uvicorn main:app \
         --reload \
-        --reload-exclude '.venv/*' --reload-exclude 'cache/*' --reload-exclude 'data/*' \
+        --reload-exclude "$(pwd)/.venv" --reload-exclude "$(pwd)/cache" --reload-exclude "$(pwd)/data" \
         --log-level warning \
         --port "${APP_PORT:-8080}"
 

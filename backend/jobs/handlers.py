@@ -323,6 +323,7 @@ async def handle_summarize(job: dict) -> dict | None:
             "mode": mode,
             "source_type": source_type,
             "char_count": len(response_text),
+            "extracted_text": extracted_text,
         },
     }
 

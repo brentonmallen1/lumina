@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ArrowLeft, Save, RefreshCw, AlertTriangle, Check, Wifi, WifiOff, Loader, Download, Play } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import * as api from '../api/client';
 import type { AudioModelMap, Capabilities, OllamaModel, Settings as SettingsType, TTSStatus, TTSVoiceMap } from '../types';
 import './Settings.css';
@@ -36,8 +36,14 @@ const COMPUTE_OPTIONS = [
   { value: 'float32',      label: 'float32 — full precision' },
 ];
 
+const VALID_SECTIONS: Section[] = ['transcription', 'application', 'security', 'ollama', 'enhancement', 'tts', 'youtube'];
+
 export default function Settings() {
-  const [section, setSection]             = useState<Section>('transcription');
+  const location = useLocation();
+  const [section, setSection]             = useState<Section>(() => {
+    const hash = window.location.hash.slice(1);
+    return VALID_SECTIONS.includes(hash as Section) ? (hash as Section) : 'transcription';
+  });
   const [settings, setSettings]           = useState<SettingsType | null>(null);
   const [draft, setDraft]                 = useState<Partial<SettingsType>>({});
   const [loading, setLoading]             = useState(true);
@@ -87,6 +93,13 @@ export default function Settings() {
   }, []);
 
   useEffect(() => { loadSettings(); }, [loadSettings]);
+
+  useEffect(() => {
+    const hash = location.hash.slice(1);
+    if (VALID_SECTIONS.includes(hash as Section)) {
+      setSection(hash as Section);
+    }
+  }, [location.hash]);
 
   const loadOllamaModels = useCallback(async () => {
     setOllamaModelsLoading(true);

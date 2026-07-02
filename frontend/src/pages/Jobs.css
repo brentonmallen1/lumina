@@ -458,6 +458,36 @@
   font-style: italic;
 }
 
+/* ── Expanded actions ─────────────────────────────────────────────────── */
+.job-expanded-actions {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+}
+
+.job-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+  font-family: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.job-open-btn:hover {
+  background: var(--accent-hover);
+}
+
 /* ── Responsive ───────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
   .jobs-page {

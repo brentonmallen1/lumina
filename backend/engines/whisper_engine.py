@@ -1,5 +1,7 @@
 import os
 
+import db
+
 
 class WhisperEngine:
     """OpenAI Whisper — supports CPU and CUDA GPU."""
@@ -8,10 +10,11 @@ class WhisperEngine:
         import torch
         import whisper
 
-        model_size = os.getenv("WHISPER_MODEL_SIZE", "large-v3")
+        settings = db.get_all_settings()
+        model_size = settings.get("whisper_model_size", "large-v3")
         download_root = os.getenv("WHISPER_DOWNLOAD_ROOT", "/models/whisper")
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.language = os.getenv("LANGUAGE", "en") or None
+        self.language = settings.get("language", "en") or None
 
         print(f"[whisper] Loading model '{model_size}' on {device} ...")
         self.model_name = f"whisper/{model_size}"

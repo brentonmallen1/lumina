@@ -1,4 +1,4 @@
-import os
+import db
 
 
 class FasterWhisperEngine:
@@ -8,10 +8,11 @@ class FasterWhisperEngine:
         import torch
         from faster_whisper import WhisperModel
 
-        model_size = os.getenv("WHISPER_MODEL_SIZE", "large-v3")
-        compute_type = os.getenv("COMPUTE_TYPE", "int8")
+        settings = db.get_all_settings()
+        model_size = settings.get("whisper_model_size", "large-v3")
+        compute_type = settings.get("compute_type", "int8")
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.language = os.getenv("LANGUAGE", "en") or None
+        self.language = settings.get("language", "en") or None
 
         print(f"[faster-whisper] Loading model '{model_size}' on {device} ({compute_type}) ...")
         self.model_name = f"faster-whisper/{model_size}"

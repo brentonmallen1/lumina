@@ -1,4 +1,4 @@
-import os
+import db
 
 
 class QwenAudioEngine:
@@ -14,7 +14,8 @@ class QwenAudioEngine:
 
         from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
 
-        model_name = os.getenv("QWEN_MODEL", "Qwen/Qwen2-Audio-7B-Instruct")
+        settings = db.get_all_settings()
+        model_name = settings.get("qwen_model", "Qwen/Qwen2-Audio-7B-Instruct")
 
         # HF_HOME controls the cache directory for all HuggingFace models.
         print(f"[qwen-audio] Loading model '{model_name}' ...")

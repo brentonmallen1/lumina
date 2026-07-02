@@ -1,4 +1,4 @@
-import os
+import db
 
 # Models that use the newer SALM class (FastConformer + LLM backbone).
 # All other canary models use the classic EncDecMultiTaskModel.
@@ -30,7 +30,8 @@ class CanaryEngine:
                 "NeMo is not installed. Run `uv sync` to install dependencies."
             )
 
-        model_name = os.getenv("CANARY_MODEL", "nvidia/canary-qwen-2.5b")
+        settings = db.get_all_settings()
+        model_name = settings.get("canary_model", "nvidia/canary-qwen-2.5b")
         self.model_name = model_name
         self._is_salm = model_name in _SALM_MODELS
 
@@ -54,7 +55,8 @@ class CanaryEngine:
     def _load_classic(self, model_name: str) -> None:
         import nemo.collections.asr as nemo_asr
 
-        self.language = os.getenv("LANGUAGE", "en") or "en"
+        settings = db.get_all_settings()
+        self.language = settings.get("language", "en") or "en"
         self._model = nemo_asr.models.EncDecMultiTaskModel.from_pretrained(model_name)
         self._model.eval()
 
