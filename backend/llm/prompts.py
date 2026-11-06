@@ -157,6 +157,17 @@ PROMPTS: dict[str, dict[str, str]] = {
             "2. The 'Description' under Source information — a video description often has the official ingredients list\n"
             "3. Main content/transcript — spoken or written recipe details\n\n"
             "Cross-reference all sources. Note any discrepancies (e.g., different quantities, missing items).\n\n"
+            "Accuracy rules:\n"
+            "- Ingredients: include every ingredient with its quantity, unit AND preparation exactly as given "
+            "(e.g. \"1 medium onion, diced\", \"2 cloves garlic, minced\"). Include ingredients that only appear "
+            "in the steps (e.g. pasta water, salt for the water). Never invent a quantity — leave it out if unstated.\n"
+            "- Steps: include EVERY step in the order it is done, one action per step, including small ones "
+            "(adding butter, reserving pasta water, resting). Do not merge, summarize away, or skip steps. "
+            "Keep the heat levels, temperatures and times that are mentioned.\n"
+            "- Check before answering: every ingredient must appear in at least one step (say when and how it is "
+            "added), and every ingredient used in a step must be in the ingredient list.\n"
+            "- When structured data or a written recipe is present, follow it exactly and use the transcript only "
+            "for tips; otherwise reconstruct the recipe from the transcript in the order it is cooked.\n\n"
             "Output the recipe in this exact markdown format:\n\n"
             "# [Recipe Title]\n\n"
             "[1-2 sentence description of the dish]\n\n"
@@ -191,6 +202,17 @@ PROMPTS: dict[str, dict[str, str]] = {
             "1. 'Structured data (schema.org)' section — authoritative ingredients/instructions from the webpage\n"
             "2. The 'Description' under Source information — a video description often has the official ingredients list\n"
             "3. Main content/transcript — spoken or written recipe details\n\n"
+            "Accuracy rules:\n"
+            "- Ingredients: include every ingredient with its quantity, unit AND preparation exactly as given "
+            "(e.g. \"1 medium onion, diced\", \"2 cloves garlic, minced\"). Include ingredients that only appear "
+            "in the steps (e.g. pasta water, salt for the water). Never invent a quantity — leave it out if unstated.\n"
+            "- Steps: include EVERY step in the order it is done, one action per step, including small ones "
+            "(adding butter, reserving pasta water, resting). Do not merge, summarize away, or skip steps. "
+            "Keep the heat levels, temperatures and times that are mentioned.\n"
+            "- Check before answering: every ingredient must appear in at least one step (say when and how it is "
+            "added), and every ingredient used in a step must be in the ingredient list.\n"
+            "- When structured data or a written recipe is present, follow it exactly and use the transcript only "
+            "for tips; otherwise reconstruct the recipe from the transcript in the order it is cooked.\n\n"
             "Output a single JSON object with these exact fields:\n"
             '- "@context": "https://schema.org"\n'
             '- "@type": "Recipe"\n'
@@ -201,7 +223,7 @@ PROMPTS: dict[str, dict[str, str]] = {
             '- "totalTime": sum of prep + cook time (string or null)\n'
             '- "recipeYield": servings like "4 servings" (string or null)\n'
             '- "recipeIngredient": array of ingredient strings\n'
-            '- "recipeInstructions": array of {{"@type": "HowToStep", "text": "..."}}\n\n'
+            '- "recipeInstructions": array of {{"@type": "HowToStep", "text": "..."}} — every step must include "@type": "HowToStep"\n\n'
             "If the content does not contain a recipe, output: "
             '{{"@context": "https://schema.org", "@type": "Recipe", "name": "No recipe detected", "description": "No recipe was found in this content.", "recipeIngredient": [], "recipeInstructions": []}}\n\n'
             "Output ONLY the JSON object, nothing else.\n\n"
@@ -321,12 +343,14 @@ RECIPE_JSONLD_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"@type": {"type": "string"}, "text": {"type": "string"}},
-                "required": ["text"],
+                "properties": {"@type": {"type": "string", "enum": ["HowToStep"]}, "text": {"type": "string"}},
+                "required": ["@type", "text"],
             },
         },
     },
-    "required": ["name", "recipeIngredient", "recipeInstructions"],
+    # Normalized afterwards anyway (recipes/jsonld.py), but asking for the full
+    # shape keeps the model's output closer to valid schema.org.
+    "required": ["@context", "@type", "name", "recipeIngredient", "recipeInstructions"],
 }
 
 _LIST_ITEM = {

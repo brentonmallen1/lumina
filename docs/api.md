@@ -36,7 +36,7 @@ The summarize, chat and translate endpoints stream [Server-Sent Events](https://
 | `POST` | `/api/summarize/url` | `{source: "youtube"\|"url", url, mode, prefer_captions?, refresh?, options?}` | YouTube or a web page. Extractions are cached; `refresh: true` re-fetches. |
 | `POST` | `/api/summarize/file` | form: `file`, `source` (`audio`\|`pdf`), `mode`, `enhance_*` | Audio, video or PDF upload. |
 | `POST` | `/api/summarize/image` | form: `file`, `mode` | Image, read by a vision model. |
-| `POST` | `/api/recipe/jsonld` | `{recipe_markdown}` | Convert a Markdown recipe to schema.org JSON-LD (not streamed). |
+| `POST` | `/api/recipe/jsonld` | `{recipe_markdown, source_url?, image?}` | Convert a Markdown recipe to normalized schema.org JSON-LD (not streamed). |
 
 Modes are listed by `GET /api/prompts`; each prompt carries an `output_type` (`markdown`, `mindmap`, `json:list`, `json:recipe`, `json:mtg`). `options` carries mode-specific inputs, e.g. `{"decklist": "1 Sol Ring\n…"}` for `mtg_precon`.
 
@@ -112,6 +112,13 @@ curl -X POST "$LUMINA/api/jobs" -H "X-API-Key: $KEY" -H "Content-Type: applicati
 | `GET` | `/api/history` · `/api/history/search?q=` | Saved results; full-text search. |
 | `GET` / `POST` / `DELETE` | `/api/feeds[/{id}]` | Podcast/RSS feeds; `POST /api/feeds/{id}/check` polls now. |
 | `GET` / `DELETE` | `/api/cache[/{hash}]` | Extraction cache stats; delete an entry to force a refresh. |
+
+## Integrations
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| `POST` | `/api/integrations/mealie/test` | `{url?, token?}` | Check the Mealie URL and token (unsaved values allowed). Returns `{ok, message}`. |
+| `POST` | `/api/integrations/mealie/recipes` | `{recipe, source_url?, image?}` | Normalize a schema.org Recipe (object or JSON text) and create it in Mealie. Returns `{slug, url}`. |
 
 ## System
 

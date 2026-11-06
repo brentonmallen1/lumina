@@ -8,7 +8,7 @@ Lumina keeps its runtime settings in SQLite (`/data/app.db` in Docker). On the v
 
 A few values are read on every start instead. They are marked **deploy** below.
 
-Secrets (password, API key, HuggingFace token, YouTube cookies) are never sent back to the browser. The Settings page shows `••••••••` for a stored secret and leaves it unchanged unless you type a new one.
+Secrets (password, API key, HuggingFace token, YouTube cookies, Mealie token) are never sent back to the browser. The Settings page shows `••••••••` for a stored secret and leaves it unchanged unless you type a new one.
 
 ## Ollama (LLM)
 
@@ -81,6 +81,8 @@ Auth is off by default, which suits a trusted LAN. Turn it on before exposing Lu
 |---|---|---|
 | `HF_TOKEN` | *(blank)* | HuggingFace token for speaker diarization (pyannote.audio). |
 | `YOUTUBE_COOKIES` | *(blank)* | Netscape-format cookies for YouTube, for age-restricted videos or rate limits. Easier to paste in Settings → YouTube. |
+| `MEALIE_URL` | *(blank)* | Your Mealie server, e.g. `http://192.168.1.10:9925`. Enables **Send to Mealie** on recipe results. |
+| `MEALIE_API_TOKEN` | *(blank)* | Mealie API token (Mealie: your profile → API Tokens). Stored as a secret. |
 | `APP_NAME` | `Lumina` | Name shown in the Basic Auth prompt. |
 
 ## Deployment

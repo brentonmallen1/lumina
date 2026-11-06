@@ -313,6 +313,7 @@ MODE_PIPELINES: dict[str, ModePipeline] = {}
 def _load_pipelines() -> None:
     """Import modules that register mode pipelines (lazy, avoids import cycles)."""
     import mtg.pipeline  # noqa: F401  (registers "mtg_precon")
+    import recipes.pipeline  # noqa: F401  (registers "recipe_jsonld")
 
 
 def register_pipeline(mode: str):

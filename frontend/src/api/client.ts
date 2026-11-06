@@ -114,11 +114,33 @@ export interface RecipeJsonLD {
   recipeInstructions: { '@type': string; text: string }[];
 }
 
-export function convertRecipeToJsonLD(recipeMarkdown: string): Promise<RecipeJsonLD> {
+export function convertRecipeToJsonLD(recipeMarkdown: string, sourceUrl?: string): Promise<RecipeJsonLD> {
   return request<RecipeJsonLD>('/api/recipe/jsonld', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ recipe_markdown: recipeMarkdown }),
+    body: JSON.stringify({ recipe_markdown: recipeMarkdown, source_url: sourceUrl }),
+  });
+}
+
+// ── Mealie ─────────────────────────────────────────────────────────────────
+
+/** Check a Mealie URL + token (unsaved values from the form are allowed). */
+export function testMealie(url?: string, token?: string): Promise<{ ok: boolean; message: string }> {
+  return request('/api/integrations/mealie/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, token }),
+  });
+}
+
+/** Create a recipe in Mealie from schema.org JSON-LD. Returns the new recipe's link. */
+export function sendRecipeToMealie(
+  recipe: unknown, sourceUrl?: string,
+): Promise<{ slug: string; url: string }> {
+  return request('/api/integrations/mealie/recipes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipe, source_url: sourceUrl }),
   });
 }
 

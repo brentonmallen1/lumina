@@ -14,7 +14,7 @@ What each Summarize mode produces, and how Lumina handles YouTube, long content 
 | **Mind Map** | Interactive diagram | Rendered with markmap; download as `.svg`. |
 | **Meeting Minutes** | Structured notes | Attendees, decisions, action items, next steps. |
 | **Extract List** | Structured list | Rank, title, one-line detail and timestamp for every item, plus honorable mentions. Warns when it finds fewer items than the title promises ("9 of 10"). |
-| **Recipe** | Markdown or JSON-LD | JSON-LD (schema.org/Recipe) imports into Mealie and similar apps. |
+| **Recipe** | Markdown or JSON-LD | See [Recipes](#recipes). |
 | **MTG Precon Upgrade** | Add/Cut card lists | See [below](#mtg-precon-upgrade). |
 | **Transcript / Raw Text** | The extracted text | No LLM. |
 
@@ -44,6 +44,16 @@ Lumina estimates how much of the context window a request needs. When the conten
 - **Structured modes**: each part is extracted with the same JSON schema and the results are merged, with duplicates removed by name.
 
 Progress shows as "Reading part 2 of 4…". With a 128K-context model like gemma4, videos of a couple of hours fit in one pass. Lumina also warns when a reply hits the output limit or the input filled the whole window.
+
+## Recipes
+
+When a video's description links the creator's recipe page ("print recipe"), Lumina reads that page's schema.org data first. The result is the exact recipe, with real quantities, every step and the photo, and the video adds nothing it would have to guess. Sponsor, social and affiliate links are ignored. If the page refuses automated requests, Lumina says so and rebuilds the recipe from the video instead. You can also open the page with the **URL** source.
+
+From the video alone, the model is told to keep quantities and preparation notes ("1 onion, diced"), include every step in order, and use every ingredient in a step. Steps that only happen on camera, never spoken, can still be missing; a linked recipe page avoids that.
+
+**JSON-LD output** is always normalized to valid schema.org/Recipe before you see it. That means `HowToStep` steps, ISO 8601 times, the source URL, the video thumbnail as the image, and the channel as the author. It imports cleanly with Mealie's parser (verified with Mealie v3.30).
+
+**Send to Mealie**: add your Mealie URL and API token in **Settings → Integrations**. Recipe results then get a **Send to Mealie** button that creates the recipe through Mealie's API (photo included) and links you to it.
 
 ## Chat
 

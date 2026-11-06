@@ -260,6 +260,10 @@ from routers.llm import router as llm_router  # noqa: E402
 
 app.include_router(llm_router, dependencies=[Depends(verify_auth)])
 
+from routers.integrations import router as integrations_router  # noqa: E402
+
+app.include_router(integrations_router, dependencies=[Depends(verify_auth)])
+
 # The UI is served from this same origin (and proxied in dev), so cross-origin
 # access is off unless explicitly allowed — otherwise any website a user visits
 # could read this instance's API from the LAN.
@@ -431,7 +435,7 @@ async def get_info(_: bool = Depends(verify_auth)):
 # ── Settings API ───────────────────────────────────────────────────────────
 # Secrets are never sent back to the browser; a set secret is shown as MASK and
 # a PUT that echoes MASK leaves the stored value untouched.
-_SECRET_KEYS = {"auth_password", "api_key", "hf_token", "youtube_cookies"}
+_SECRET_KEYS = {"auth_password", "api_key", "hf_token", "youtube_cookies", "mealie_api_token"}
 _SECRET_MASK = "••••••••"
 
 

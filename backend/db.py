@@ -63,6 +63,9 @@ _DEFAULTS: dict[str, str] = {
     "tts_voice":         os.getenv("TTS_VOICE", "af_bella"),
     # YouTube
     "youtube_cookies":   os.getenv("YOUTUBE_COOKIES", ""),
+    # Mealie (send recipes directly)
+    "mealie_url":        os.getenv("MEALIE_URL", ""),
+    "mealie_api_token":  os.getenv("MEALIE_API_TOKEN", ""),
 }
 
 
@@ -309,6 +312,9 @@ def _validate_setting(key: str, value: str) -> str | None:
                     return f"Context for {model} must be at least 2048 tokens"
         except (TypeError, ValueError):
             return "ollama_context_overrides must be a JSON object of {model: tokens}"
+    elif key == "mealie_url":
+        if value and not (value.startswith("http://") or value.startswith("https://")):
+            return "mealie_url must start with http:// or https://"
     elif key == "ollama_url":
         if value and not (value.startswith("http://") or value.startswith("https://")):
             return "ollama_url must start with http:// or https://"

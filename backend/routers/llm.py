@@ -25,11 +25,11 @@ import asyncio
 import json
 import tempfile
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 import db
@@ -426,30 +426,10 @@ async def translate_text(req: TranslateRequest):
 
 # ── Recipe JSON-LD export ─────────────────────────────────────────────────────
 
-class HowToStep(BaseModel):
-    type: str = Field(default="HowToStep", alias="@type")
-    text: str
-
-    model_config = {"populate_by_name": True}
-
-
-class RecipeJsonLD(BaseModel):
-    context: str = Field(default="https://schema.org", alias="@context")
-    type: str = Field(default="Recipe", alias="@type")
-    name: str
-    description: Optional[str] = ""
-    prepTime: Optional[str] = None
-    cookTime: Optional[str] = None
-    totalTime: Optional[str] = None
-    recipeYield: Optional[str] = None
-    recipeIngredient: list[str] = []
-    recipeInstructions: list[HowToStep] = []
-
-    model_config = {"populate_by_name": True}
-
-
 class RecipeJsonLDRequest(BaseModel):
     recipe_markdown: str
+    source_url: str | None = None   # added as the recipe's url
+    image: str | None = None        # e.g. the video thumbnail
 
 
 @router.post("/recipe/jsonld")
@@ -472,10 +452,12 @@ async def convert_recipe_to_jsonld(req: RecipeJsonLDRequest):
         if ev["type"] == "pass_done":
             raw = ev["text"]
 
+    from recipes.jsonld import is_empty_recipe, normalize_recipe
+
     data = parse_json_result(raw)
     if not isinstance(data, dict):
         raise HTTPException(status_code=422, detail="LLM did not return valid JSON")
-    try:
-        return RecipeJsonLD(**data).model_dump(by_alias=True)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid recipe structure: {exc}")
+    recipe = normalize_recipe(data, {"url": req.source_url, "thumbnail": req.image})
+    if is_empty_recipe(recipe):
+        raise HTTPException(status_code=422, detail="No ingredients or steps were found in this recipe.")
+    return recipe

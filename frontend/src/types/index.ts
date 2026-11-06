@@ -136,6 +136,9 @@ export interface Settings {
   tts_voice: string;
   // YouTube
   youtube_cookies: string;
+  // Mealie
+  mealie_url: string;
+  mealie_api_token: string;
 }
 
 export interface TTSVoice {

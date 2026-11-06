@@ -12,7 +12,7 @@ const OUTPUT_STOPS = [8192, 16384, 32768, 65536];
 /** The API masks stored secrets with this value; sending it back keeps them unchanged. */
 const SECRET_MASK = '••••••••';
 
-type Section = 'transcription' | 'application' | 'security' | 'ollama' | 'enhancement' | 'tts' | 'youtube';
+type Section = 'transcription' | 'application' | 'security' | 'ollama' | 'enhancement' | 'tts' | 'youtube' | 'integrations';
 
 const AUDIO_MODELS: { key: string; label: string; description: string }[] = [
   { key: 'deepfilternet', label: 'DeepFilterNet',  description: 'Noise reduction' },
@@ -43,7 +43,7 @@ const COMPUTE_OPTIONS = [
   { value: 'float32',      label: 'float32 — full precision' },
 ];
 
-const VALID_SECTIONS: Section[] = ['transcription', 'application', 'security', 'ollama', 'enhancement', 'tts', 'youtube'];
+const VALID_SECTIONS: Section[] = ['transcription', 'application', 'security', 'ollama', 'enhancement', 'tts', 'youtube', 'integrations'];
 
 export default function Settings() {
   const location = useLocation();
@@ -69,6 +69,8 @@ export default function Settings() {
   const [testingConn, setTestingConn]         = useState(false);
   const [connStatus, setConnStatus]           = useState<{ ok: boolean; message: string } | null>(null);
   const [modelInfo, setModelInfo]             = useState<OllamaModelInfo | null>(null);
+  const [mealieTesting, setMealieTesting]     = useState(false);
+  const [mealieStatus, setMealieStatus]       = useState<{ ok: boolean; message: string } | null>(null);
 
   // Audio enhancement models
   const [audioModels, setAudioModels]         = useState<AudioModelMap | null>(null);
@@ -365,6 +367,7 @@ export default function Settings() {
                 ['enhancement',  'Enhancement'],
                 ['tts',           'Text-to-Speech'],
                 ['youtube',       'YouTube'],
+                ['integrations',  'Integrations'],
                 ['application',  'Application'],
                 ['security',     'Security'],
               ] as [Section, string][]
@@ -965,6 +968,80 @@ export default function Settings() {
                           ? 'Cookies saved.'
                           : `${d.youtube_cookies.trim().split('\n').filter(l => l && !l.startsWith('#')).length} cookie entries saved.`}
                       </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Integrations ───────────────────────────────────────── */}
+            {section === 'integrations' && (
+              <div className="settings-section">
+                <div className="settings-section-header">
+                  <h2 className="settings-section-title">Integrations</h2>
+                  <p className="settings-section-desc">
+                    Connect other self-hosted apps. With Mealie set up, recipe results get a
+                    {' '}<strong>Send to Mealie</strong> button that creates the recipe directly.
+                  </p>
+                </div>
+
+                <div className="settings-fields">
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="mealie-url">
+                      Mealie URL
+                      <span className="settings-label-hint">The address you open Mealie at, e.g. http://192.168.1.10:9925</span>
+                    </label>
+                    <input
+                      id="mealie-url"
+                      type="url"
+                      className="settings-input"
+                      value={d.mealie_url ?? ''}
+                      onChange={e => { set('mealie_url', e.target.value); setMealieStatus(null); }}
+                      placeholder="http://mealie.local:9925"
+                    />
+                  </div>
+
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="mealie-token">
+                      API token
+                      <span className="settings-label-hint">In Mealie: your profile → API Tokens → Generate.</span>
+                    </label>
+                    <div className="settings-test-row">
+                      <input
+                        id="mealie-token"
+                        type="password"
+                        className="settings-input"
+                        value={d.mealie_api_token ?? ''}
+                        onChange={e => { set('mealie_api_token', e.target.value); setMealieStatus(null); }}
+                        autoComplete="off"
+                      />
+                      <button
+                        className="settings-test-btn"
+                        type="button"
+                        disabled={mealieTesting || !d.mealie_url}
+                        onClick={async () => {
+                          setMealieTesting(true);
+                          setMealieStatus(null);
+                          try {
+                            setMealieStatus(await api.testMealie(d.mealie_url, d.mealie_api_token));
+                          } catch (err) {
+                            setMealieStatus({ ok: false, message: (err as Error).message });
+                          } finally {
+                            setMealieTesting(false);
+                          }
+                        }}
+                      >
+                        {mealieTesting
+                          ? <Loader size={14} className="spinning" aria-hidden="true" />
+                          : <Wifi size={14} aria-hidden="true" />}
+                        {mealieTesting ? 'Testing…' : 'Test'}
+                      </button>
+                    </div>
+                    {mealieStatus && (
+                      <div className={`settings-connection-status ${mealieStatus.ok ? 'ok' : 'err'}`}>
+                        {mealieStatus.ok ? <Check size={13} aria-hidden="true" /> : <WifiOff size={13} aria-hidden="true" />}
+                        {mealieStatus.message}
+                      </div>
                     )}
                   </div>
                 </div>

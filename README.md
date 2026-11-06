@@ -79,6 +79,7 @@ It's built for people who already run a home server and want one tool that handl
 - **Seven sources**: text, audio and video files, YouTube, web pages (rendered in headless Chromium), PDFs (as text, or as page images for vision models), and images.
 - **Eleven modes**: Summary, TL;DR, Key Points, Action Items, Q&A, Mind Map, Meeting Minutes, Extract List, Recipe (Markdown or schema.org JSON-LD), MTG Precon Upgrade, and raw Transcript. See [Modes](docs/modes.md).
 - **Structured results**: list, recipe and MTG modes use JSON schemas at a low temperature, so you get clean structured output with copy and export buttons, not prose.
+- **Recipes to Mealie**: uses the creator's linked recipe page when there is one, outputs import-ready schema.org JSON-LD, and has a one-click **Send to Mealie** button *(optional; set it up in Settings → Integrations)*.
 - **Chat and translate**: ask follow-up questions about the full source, or translate any result into 15 languages.
 - **Read aloud**: Kokoro text-to-speech with 28 English voices *(optional; download weights in Settings)*.
 

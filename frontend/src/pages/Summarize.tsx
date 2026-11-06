@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   ArrowLeft, Sparkles, Copy, Download, RotateCcw, Square,
   Mic, Youtube, Globe, FileText, File as FileIcon, Image as ImageIcon,
-  AlertTriangle, X, Code, Volume2, Loader, FileJson,
+  AlertTriangle, X, Code, Volume2, Loader, FileJson, ChefHat, ExternalLink,
 } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import * as api from '../api/client';
@@ -163,9 +163,18 @@ export default function Summarize() {
   const [jsonLdError, setJsonLdError]     = useState('');
   const [jsonLdCopied, setJsonLdCopied]   = useState(false);
 
+  // Mealie (Settings → Integrations)
+  const [mealieReady, setMealieReady]     = useState(false);
+  const [mealieSending, setMealieSending] = useState(false);
+  const [mealieLink, setMealieLink]       = useState('');
+  const [mealieError, setMealieError]     = useState('');
+
   const behavior = outputBehavior(outputType);
   const isRunning = ['extracting', 'transcribing', 'thinking', 'streaming'].includes(view);
-  const modeLabel = (id: string) => modes.find(m => m.id === id)?.label ?? id;
+  const modeLabel = (id: string): string => {
+    if (id === 'recipe_jsonld') return `${modeLabel('recipe')} (JSON-LD)`;
+    return modes.find(m => m.id === id)?.label ?? id;
+  };
 
   useEffect(() => () => {
     abortRef.current?.abort();
@@ -178,6 +187,7 @@ export default function Summarize() {
     api.getSettings().then(s => {
       setTtsEnabled(s.tts_enabled !== 'false');
       setTtsVoice(s.tts_voice || undefined);
+      setMealieReady(Boolean(s.mealie_url && s.mealie_api_token));
       const maxSize = parseInt(s.max_upload_size_mb, 10);
       if (!isNaN(maxSize) && maxSize > 0) setMaxUploadSizeMb(maxSize);
     }).catch(() => {});
@@ -208,6 +218,8 @@ export default function Summarize() {
     setWarnings([]);
     setStatusDetail('');
     setJsonLdError('');
+    setMealieLink('');
+    setMealieError('');
   };
 
   const addWarning = (msg: string) => setWarnings(prev => (prev.includes(msg) ? prev : [...prev, msg]));
@@ -479,6 +491,8 @@ export default function Summarize() {
   const handleModeClick = (newMode: string) => {
     if (isRunning) return;
     setMode(newMode);
+    setMealieLink('');
+    setMealieError('');
     const cached = modeCache[newMode]
       ?? (newMode === 'recipe' ? modeCache.recipe_jsonld : undefined);
     if (cached) {
@@ -540,12 +554,36 @@ export default function Summarize() {
     }
   };
 
+  /** The URL the current result came from (YouTube or webpage), if any. */
+  const resultSourceUrl = sourceUrl
+    ?? (sourceTab === 'youtube' ? youtubeUrl.trim() || undefined
+      : sourceTab === 'url' ? urlInput.trim() || undefined : undefined);
+
+  /** JSON-LD for the recipe on screen: the result itself, or the exported JSON-LD of a Markdown recipe. */
+  const recipeJsonLd = resultMode === 'recipe_jsonld' ? result
+    : resultMode === 'recipe' ? modeCache.recipe_jsonld?.result ?? '' : '';
+
+  const sendToMealie = async () => {
+    if (!recipeJsonLd) return;
+    setMealieSending(true);
+    setMealieError('');
+    setMealieLink('');
+    try {
+      const { url } = await api.sendRecipeToMealie(parseJson(recipeJsonLd) ?? recipeJsonLd, resultSourceUrl);
+      setMealieLink(url);
+    } catch (err) {
+      setMealieError(err instanceof Error ? err.message : 'Sending to Mealie failed');
+    } finally {
+      setMealieSending(false);
+    }
+  };
+
   const generateJsonLD = async () => {
     if (!result || resultMode !== 'recipe') return;
     setJsonLdLoading(true);
     setJsonLdError('');
     try {
-      const data = await api.convertRecipeToJsonLD(result);
+      const data = await api.convertRecipeToJsonLD(result, resultSourceUrl);
       setModeCache(prev => ({
         ...prev,
         recipe_jsonld: { result: JSON.stringify(data, null, 2), reasoning: '', outputType: 'json:recipe' },
@@ -894,6 +932,26 @@ export default function Summarize() {
                     )
                   )}
                   {jsonLdError && <span className="summarize-jsonld-error" role="alert">{jsonLdError}</span>}
+                  {mealieReady && recipeJsonLd && (
+                    mealieLink ? (
+                      <a className="summarize-action-btn" href={mealieLink} target="_blank" rel="noreferrer">
+                        <ExternalLink size={14} aria-hidden="true" />
+                        Open in Mealie
+                      </a>
+                    ) : (
+                      <button
+                        className="summarize-action-btn"
+                        onClick={sendToMealie}
+                        disabled={mealieSending}
+                        title="Create this recipe in Mealie"
+                      >
+                        {mealieSending
+                          ? <><Loader size={13} className="summarize-tts-spin" aria-hidden="true" /> Sending…</>
+                          : <><ChefHat size={14} aria-hidden="true" /> Send to Mealie</>}
+                      </button>
+                    )
+                  )}
+                  {mealieError && <span className="summarize-jsonld-error" role="alert">{mealieError}</span>}
                   <button className="summarize-action-btn summarize-action-btn--ghost" onClick={reset}>
                     <RotateCcw size={14} aria-hidden="true" />
                     New
