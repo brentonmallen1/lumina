@@ -2,7 +2,7 @@
 # Run with:  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
 # Or use start.sh which reads ENABLE_GPU from .env automatically.
 services:
-  whisper-gui:
+  lumina:
     deploy:
       resources:
         reservations:

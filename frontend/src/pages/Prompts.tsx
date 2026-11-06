@@ -5,16 +5,12 @@ import * as api from '../api/client';
 import type { Prompt } from '../types';
 import './Prompts.css';
 
-// ── Built-in mode slugs (determines mode selector options) ─────────────────
+// Mode selector options come from the built-in prompts (GET /api/prompts);
+// NEW_MODE lets the user name a brand-new mode slug.
+const NEW_MODE = '__new__';
 
-const BUILT_IN_MODES = [
-  { value: 'summary',          label: 'Summary' },
-  { value: 'key_points',       label: 'Key Points' },
-  { value: 'mind_map',         label: 'Mind Map' },
-  { value: 'action_items',     label: 'Action Items' },
-  { value: 'q_and_a',          label: 'Q&A' },
-  { value: 'meeting_minutes',  label: 'Meeting Minutes' },
-];
+/** "My Mode!" → "my_mode" */
+const toSlug = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 
 // ── Editor form state ──────────────────────────────────────────────────────
 
@@ -45,6 +41,7 @@ export default function Prompts() {
   const [form,      setForm]      = useState<FormState>(EMPTY_FORM);
   const [saving,    setSaving]    = useState(false);
   const [formError, setFormError] = useState('');
+  const [newModeSlug, setNewModeSlug] = useState('');
 
   // Reset confirm
   const [confirmReset, setConfirmReset] = useState(false);
@@ -67,6 +64,7 @@ export default function Prompts() {
   const openNew = () => {
     setEditing(null);
     setForm(EMPTY_FORM);
+    setNewModeSlug('');
     setFormError('');
     setShowForm(true);
   };
@@ -94,6 +92,8 @@ export default function Prompts() {
 
   const handleSave = async () => {
     if (!form.name.trim())     { setFormError('Name is required.'); return; }
+    const mode = form.mode === NEW_MODE ? toSlug(newModeSlug || form.name) : form.mode;
+    if (!mode) { setFormError('Give the new mode a name.'); return; }
     if (!form.template.trim()) { setFormError('Template is required.'); return; }
     if (!form.template.includes('{content}')) {
       setFormError('Template must include the {content} placeholder.');
@@ -112,7 +112,7 @@ export default function Prompts() {
       } else {
         await api.createPrompt({
           name:          form.name.trim(),
-          mode:          form.mode,
+          mode,
           system_prompt: form.system_prompt,
           template:      form.template,
         });
@@ -150,6 +150,17 @@ export default function Prompts() {
 
   const defaults = prompts.filter(p => p.is_default);
   const custom   = prompts.filter(p => !p.is_default);
+  // Built-in modes, plus any custom-only modes, for the mode selector.
+  const modeOptions = Array.from(
+    new Map(
+      // customs first so a built-in's label wins for shared modes
+      [...prompts].sort((a, b) => Number(a.is_default) - Number(b.is_default))
+        .map(p => [p.mode, { value: p.mode, label: p.is_default ? p.name : `${p.name} (${p.mode})` }]),
+    ).values(),
+  );
+  if (editing && !modeOptions.some(m => m.value === form.mode)) {
+    modeOptions.push({ value: form.mode, label: form.mode });
+  }
 
   return (
     <div className="prompts-page">
@@ -314,11 +325,22 @@ export default function Prompts() {
                   onChange={e => setField('mode', e.target.value)}
                   disabled={!!editing}
                 >
-                  {BUILT_IN_MODES.map(m => (
+                  {modeOptions.map(m => (
                     <option key={m.value} value={m.value}>{m.label}</option>
                   ))}
-                  <option value="custom">Custom (other)</option>
+                  {!editing && <option value={NEW_MODE}>New mode…</option>}
                 </select>
+                {form.mode === NEW_MODE && !editing && (
+                  <input
+                    type="text"
+                    className="prompts-input"
+                    style={{ marginTop: 8 }}
+                    value={newModeSlug}
+                    onChange={e => setNewModeSlug(e.target.value)}
+                    placeholder={`Mode id, e.g. ${toSlug(form.name) || 'podcast_notes'}`}
+                    aria-label="New mode id"
+                  />
+                )}
               </div>
 
               <div className="prompts-field">

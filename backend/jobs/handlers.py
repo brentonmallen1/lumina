@@ -391,6 +391,91 @@ async def handle_download(job: dict) -> dict | None:
     }
 
 
+async def handle_feed_episode(job: dict) -> dict | None:
+    """Download a podcast episode, transcribe it, then summarize it.
+
+    Job config: feed_entry_id, audio_url, mode.
+    """
+    import os
+    import time
+    import httpx
+    from llm.runner import build_source_header, collect, resolve_runtime, run_mode
+    from transcriber import get_engine
+    from extractors.captions import segments_from_engine, to_paragraphs
+
+    job_id = job["id"]
+    config = job.get("config") or {}
+    entry_id = config.get("feed_entry_id")
+    audio_url = config.get("audio_url") or ""
+    mode = config.get("mode") or "summary"
+    title = job.get("source_title") or "Podcast episode"
+
+    if not audio_url.startswith(("http://", "https://")):
+        raise ValueError("Episode audio URL must be http(s)")
+
+    cache_base = Path(os.getenv("AUDIO_CACHE_DIR", Path(__file__).parent.parent / "cache" / "audio"))
+    suffix = Path(audio_url.split("?")[0]).suffix.lower() or ".mp3"
+    if len(suffix) > 6:
+        suffix = ".mp3"
+    audio_path = cache_base / f"{job_id}{suffix}"
+    try:
+        limit = int(db.get_setting("max_upload_size_mb", "500")) * 1024 * 1024
+    except ValueError:
+        limit = 500 * 1024 * 1024
+
+    try:
+        if entry_id:
+            db.update_feed_entry_status(entry_id, "downloading", job_id)
+        db.update_job_status(job_id, "running", "Downloading episode…")
+        size, last = 0, 0.0
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=True) as client:
+            async with client.stream("GET", audio_url) as resp:
+                resp.raise_for_status()
+                with open(audio_path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(1024 * 1024):
+                        size += len(chunk)
+                        if size > limit:
+                            raise ValueError(f"Episode exceeds the {limit // (1024 * 1024)} MB size limit")
+                        f.write(chunk)
+                        if time.monotonic() - last > 2:
+                            last = time.monotonic()
+                            if db.update_job_progress(job_id, f"Downloading episode… {size // (1024 * 1024)} MB") == "cancelled":
+                                raise JobCancelled()
+
+        if entry_id:
+            db.update_feed_entry_status(entry_id, "processing", job_id)
+        db.update_job_status(job_id, "running", "Transcribing…")
+        engine = await asyncio.to_thread(get_engine)
+        raw = await asyncio.to_thread(engine.transcribe, str(audio_path))
+        transcript = to_paragraphs(segments_from_engine(raw))
+        if not transcript:
+            raise ValueError("Transcription produced no text")
+
+        db.update_job_status(job_id, "running", f"Processing with {mode} mode…")
+        rt = await resolve_runtime()
+        source_meta = {"title": title, "url": audio_url}
+        header = build_source_header(source_meta)
+        final = await collect(run_mode(transcript, mode, rt, header=header, source_meta=source_meta))
+        result_text = final.get("text", "")
+
+        if result_text:
+            db.create_history_entry(mode=mode, source="feed", result=result_text,
+                                    reasoning=final.get("reasoning", ""), source_detail=title)
+        if entry_id:
+            db.update_feed_entry_status(entry_id, "done", job_id)
+        meta = {k: v for k, v in (final.get("meta") or {}).items() if k != "data"}
+        return {
+            "result": result_text,
+            "result_meta": {**meta, "reasoning": final.get("reasoning", ""),
+                            "extracted_text": header + transcript, "source_type": "feed"},
+            "output_file": audio_path.name,
+        }
+    except BaseException:
+        if entry_id:
+            db.update_feed_entry_status(entry_id, "error", job_id)
+        raise
+
+
 def register_handlers(worker: "JobWorker") -> None:
     """Register all job handlers with the worker."""
     from .worker import JobWorker
@@ -400,5 +485,6 @@ def register_handlers(worker: "JobWorker") -> None:
     worker.register_handler("extract", handle_extract)
     worker.register_handler("summarize", handle_summarize)
     worker.register_handler("download", handle_download)
+    worker.register_handler("feed_episode", handle_feed_episode)
 
     logger.info("Registered all job handlers")

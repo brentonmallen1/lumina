@@ -1,10 +1,15 @@
 services:
-  whisper-gui:
+  lumina:
     build:
       context: .
       dockerfile: backend/Dockerfile
       args:
         PLAYWRIGHT_BASE_IMAGE: "${DOCKER_REGISTRY}:playwright-base"
+    # Everything in .env (OLLAMA_*, AUTH_*, TTS_*, …) reaches the container;
+    # the environment block below only pins container paths and defaults.
+    env_file:
+      - path: .env
+        required: false
     ports:
       - "${APP_PORT:-8880}:8000"
       # Uncomment to expose the API on a separate host port (e.g. for dedicated firewall rules)
@@ -16,7 +21,7 @@ services:
       API_KEY: ${API_KEY:-}
       # ── Transcription engine (seeds DB on first run) ──────────────────────
       TRANSCRIPTION_ENGINE: ${TRANSCRIPTION_ENGINE:-faster-whisper}
-      WHISPER_MODEL_SIZE:   ${WHISPER_MODEL_SIZE:-large-v3}
+      WHISPER_MODEL_SIZE:   ${WHISPER_MODEL_SIZE:-large-v3-turbo}
       CANARY_MODEL:         ${CANARY_MODEL:-nvidia/canary-qwen-2.5b}
       QWEN_MODEL:           ${QWEN_MODEL:-Qwen/Qwen2.5-Audio-3B-Instruct}
       COMPUTE_TYPE:         ${COMPUTE_TYPE:-int8}
@@ -35,4 +40,10 @@ services:
       - ${MODELS_VOLUME:-./volumes/models}:/models
       - ${AUDIO_CACHE_VOLUME:-./volumes/audio_cache}:/cache/audio
       - ${DATA_VOLUME:-./volumes/data}:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     restart: unless-stopped

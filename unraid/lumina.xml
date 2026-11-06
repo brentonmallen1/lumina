@@ -76,11 +76,27 @@
   <Config
     Name="Ollama Model"
     Target="OLLAMA_MODEL"
-    Default="llama3.2"
+    Default="gemma4"
     Type="Variable"
     Display="always"
     Required="true"
-    Description="Ollama model to use for summarization (e.g. llama3.2, mistral, gemma3).">llama3.2</Config>
+    Description="Ollama model for summaries and chat (e.g. gemma4, gemma4:31b, qwen3). Can be changed later in Settings.">gemma4</Config>
+
+  <Config
+    Name="LLM Output Budget"
+    Target="OLLAMA_OUTPUT_BUDGET"
+    Default="32768"
+    Type="Variable"
+    Display="advanced"
+    Description="Tokens reserved for each reply, reasoning included. Seeds the setting on first run.">32768</Config>
+
+  <Config
+    Name="LLM Context Cap"
+    Target="OLLAMA_CONTEXT_CAP"
+    Default=""
+    Type="Variable"
+    Display="advanced"
+    Description="Optional upper limit on the context window. Blank = each model's own maximum. Lower it if your GPU runs out of memory."></Config>
 
   <!-- ── Engine ─────────────────────────────────────── -->
   <Config
@@ -163,6 +179,30 @@
     Type="Variable"
     Display="advanced"
     Description="Default TTS voice. Options: af_bella, af_nova, af_sarah, am_michael, bm_george, bf_emma, and more. Configure in Settings.">af_bella</Config>
+
+  <!-- ── Limits ────────────────────────────────────── -->
+  <Config
+    Name="Max Concurrent Jobs"
+    Target="MAX_CONCURRENT_JOBS"
+    Default="2"
+    Type="Variable"
+    Display="advanced"
+    Description="Background jobs (transcriptions, summaries, podcast episodes) that run at once.">2</Config>
+
+  <Config
+    Name="Max Upload Size (MB)"
+    Target="MAX_UPLOAD_SIZE_MB"
+    Default="500"
+    Type="Variable"
+    Display="advanced">500</Config>
+
+  <Config
+    Name="Audio Cache TTL (hours)"
+    Target="AUDIO_CACHE_TTL_HOURS"
+    Default="72"
+    Type="Variable"
+    Display="advanced"
+    Description="Uploaded audio older than this is deleted (0 = keep forever).">72</Config>
 
   <!-- ── API ───────────────────────────────────────── -->
   <Config

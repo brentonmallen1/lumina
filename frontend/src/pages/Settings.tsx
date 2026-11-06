@@ -5,6 +5,9 @@ import * as api from '../api/client';
 import type { AudioModelMap, Capabilities, OllamaModel, OllamaModelInfo, Settings as SettingsType, TTSStatus, TTSVoiceMap } from '../types';
 import './Settings.css';
 
+/** The API masks stored secrets with this value; sending it back keeps them unchanged. */
+const SECRET_MASK = '••••••••';
+
 type Section = 'transcription' | 'application' | 'security' | 'ollama' | 'enhancement' | 'tts' | 'youtube';
 
 const AUDIO_MODELS: { key: string; label: string; description: string }[] = [
@@ -954,7 +957,9 @@ export default function Settings() {
                     />
                     {d.youtube_cookies && (
                       <p className="settings-label-hint">
-                        {d.youtube_cookies.trim().split('\n').filter(l => l && !l.startsWith('#')).length} cookie entries saved.
+                        {d.youtube_cookies === SECRET_MASK
+                          ? 'Cookies saved.'
+                          : `${d.youtube_cookies.trim().split('\n').filter(l => l && !l.startsWith('#')).length} cookie entries saved.`}
                       </p>
                     )}
                   </div>

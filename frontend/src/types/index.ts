@@ -2,7 +2,7 @@ export type JobStatus = 'pending' | 'enhancing' | 'processing' | 'done' | 'error
 
 // New persistent job types
 export type PersistentJobStatus = 'pending' | 'queued' | 'running' | 'done' | 'error' | 'cancelled';
-export type PersistentJobType = 'transcribe' | 'enhance' | 'extract' | 'summarize' | 'download';
+export type PersistentJobType = 'transcribe' | 'enhance' | 'extract' | 'summarize' | 'download' | 'feed_episode';
 
 export interface PersistentJob {
   id: string;
@@ -16,6 +16,8 @@ export interface PersistentJob {
   thumbnail: string | null;
   content_hash: string | null;
   result: string | null;
+  /** Set by GET /api/jobs when `result` is only a preview. */
+  result_truncated?: boolean;
   result_meta: {
     segments?: Segment[];
     language?: string;

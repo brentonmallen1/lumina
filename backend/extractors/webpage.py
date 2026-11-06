@@ -5,6 +5,8 @@ extracts the main article content using readability-lxml.
 Also extracts ld+json (schema.org) structured data when available (e.g., Recipe).
 """
 
+import asyncio
+import html as html_lib
 import json
 import re
 
@@ -47,12 +49,35 @@ def _is_recipe_type(type_val) -> bool:
     return False
 
 
+_BLOCK_END = re.compile(r"</(p|div|h[1-6]|li|tr|blockquote|pre|section|article)>|<br\s*/?>", re.I)
+
+
+def _readable_text(html: str) -> tuple[str | None, str]:
+    """Main article text with paragraph/list structure kept as line breaks."""
+    from readability import Document
+
+    doc = Document(html)
+    raw = doc.summary()
+    raw = re.sub(r"<li[^>]*>", "\n- ", raw, flags=re.I)
+    raw = re.sub(r"<h([1-6])[^>]*>", lambda m: "\n" + "#" * int(m.group(1)) + " ", raw, flags=re.I)
+    raw = _BLOCK_END.sub("\n", raw)
+    text = html_lib.unescape(re.sub(r"<[^>]+>", " ", raw))
+    lines = [re.sub(r"[ \t\xa0]+", " ", line).strip() for line in text.splitlines()]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return (doc.title() or None), text
+
+
 class WebpageExtractor:
     def __init__(self):
         self.title: str | None = None
 
     async def extract(self, url: str, on_status: StatusCallback) -> str:
-        from readability import Document
+        from urllib.parse import urlparse
+
+        # Only web URLs — a headless browser would happily open file:// or
+        # chrome:// pages, exposing local files to the LLM output.
+        if urlparse(url).scheme not in ("http", "https"):
+            raise ValueError("Only http:// and https:// URLs can be fetched")
 
         await on_status("extracting", "Loading webpage with browser…")
         html = await self._load_html(url)
@@ -61,12 +86,9 @@ class WebpageExtractor:
         structured = self._extract_ld_json(html)
 
         await on_status("extracting", "Extracting article content…")
-        doc = Document(html)
-        self.title = doc.title() or None
-
-        raw = doc.summary()
-        text = re.sub(r"<[^>]+>", " ", raw)
-        text = re.sub(r"\s+", " ", text).strip()
+        # readability is CPU-bound; keep it off the event loop.
+        title, text = await asyncio.to_thread(_readable_text, html)
+        self.title = title
 
         if not text and not structured:
             raise ValueError("Could not extract readable content from this URL.")

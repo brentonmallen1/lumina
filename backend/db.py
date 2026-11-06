@@ -680,7 +680,7 @@ def reset_default_prompts() -> None:
 
 # Valid job statuses and types
 JOB_STATUSES = {"pending", "queued", "running", "done", "error", "cancelled"}
-JOB_TYPES = {"transcribe", "enhance", "extract", "summarize", "download"}
+JOB_TYPES = {"transcribe", "enhance", "extract", "summarize", "download", "feed_episode"}
 
 
 def _row_to_job(row: sqlite3.Row) -> dict:
@@ -702,9 +702,11 @@ def create_job(
     input_file: str | None = None,
     parent_job_id: str | None = None,
     batch_id: str | None = None,
+    job_id: str | None = None,
 ) -> dict:
-    """Create a new job in pending status."""
-    job_id = str(uuid.uuid4())
+    """Create a new job in pending status (optionally with a caller-chosen ID,
+    so files written before the job exists can share its ID)."""
+    job_id = job_id or str(uuid.uuid4())
     config_json = json.dumps(config or {})
     with _lock:
         conn = _connect()
@@ -871,6 +873,19 @@ def update_job_progress(job_id: str, status_detail: str | None = None, partial_r
         row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
         conn.close()
     return row["status"] if row else None
+
+
+def update_job_result_meta(job_id: str, updates: dict) -> None:
+    """Merge keys into a job's result_meta."""
+    with _lock:
+        conn = _connect()
+        row = conn.execute("SELECT result_meta FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row:
+            meta = json.loads(row["result_meta"] or "{}")
+            meta.update(updates)
+            conn.execute("UPDATE jobs SET result_meta = ? WHERE id = ?", (json.dumps(meta), job_id))
+            conn.commit()
+        conn.close()
 
 
 def update_job_title(job_id: str, title: str) -> None:

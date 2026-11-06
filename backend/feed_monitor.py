@@ -12,13 +12,7 @@ from __future__ import annotations
 
 import logging
 import threading
-import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +48,32 @@ def _get_audio_enclosures(entry) -> list[str]:
     return urls
 
 
+def _is_http_url(url: str) -> bool:
+    from urllib.parse import urlparse
+    try:
+        return urlparse(url).scheme in ("http", "https")
+    except ValueError:
+        return False
+
+
+def parse_timestamp(value: str | None) -> datetime | None:
+    """Parse stored timestamps ("…Z", "…+00:00", or naive SQLite UTC) as aware UTC."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def check_feed(feed_id: str, trigger_jobs: bool = True) -> dict:
     """
     Poll a single feed for new entries.
+
+    New episodes are queued as ``feed_episode`` jobs on the worker (bounded by
+    max_concurrent_jobs). On a feed's first check only the newest episode is
+    queued, so adding a podcast doesn't download its whole back catalogue.
 
     Returns {"feed_id": ..., "new_entries": int, "errors": [...]}
     """
@@ -68,6 +85,9 @@ def check_feed(feed_id: str, trigger_jobs: bool = True) -> dict:
         return {"feed_id": feed_id, "new_entries": 0, "errors": ["Feed not found"]}
 
     result: dict = {"feed_id": feed_id, "new_entries": 0, "errors": []}
+    if not _is_http_url(feed["url"]):
+        result["errors"].append("Feed URL must be http(s)")
+        return result
 
     try:
         parsed = feedparser.parse(feed["url"])
@@ -75,49 +95,44 @@ def check_feed(feed_id: str, trigger_jobs: bool = True) -> dict:
             result["errors"].append(f"Feed parse error: {parsed.bozo_exception}")
             return result
 
-        # Update title if not set yet
         feed_title = feed.get("title") or (parsed.feed.get("title") or "")
         if feed_title and feed_title != feed.get("title"):
             db.update_feed(feed_id, title=feed_title)
 
         last_entry_id = feed.get("last_entry_id")
-        new_last_id = last_entry_id
+        first_check = last_entry_id is None
+        newest_id = None
 
         for entry in parsed.entries:
             entry_id = entry.get("id") or entry.get("link") or entry.get("title", "")
             if not entry_id:
                 continue
-
-            # Stop if we've reached entries we've already processed
             if entry_id == last_entry_id:
-                break
+                break  # reached episodes we've already seen
+            if newest_id is None:
+                newest_id = entry_id
 
-            if new_last_id is None or new_last_id == last_entry_id:
-                new_last_id = entry_id
-
-            audio_urls = _get_audio_enclosures(entry)
+            audio_urls = [u for u in _get_audio_enclosures(entry) if _is_http_url(u)]
             if not audio_urls:
                 continue
-
-            title = entry.get("title", "Untitled")
-            published = entry.get("published", datetime.now(timezone.utc).isoformat())
-            audio_url = audio_urls[0]
 
             db_entry = db.upsert_feed_entry(
                 feed_id=feed_id,
                 entry_id=entry_id,
-                title=title,
-                audio_url=audio_url,
-                published=published,
+                title=entry.get("title", "Untitled"),
+                audio_url=audio_urls[0],
+                published=entry.get("published", datetime.now(timezone.utc).isoformat()),
             )
+            result["new_entries"] += 1
 
             if db_entry.get("status") == "pending" and trigger_jobs and feed.get("auto_summarize"):
                 _queue_entry_job(db_entry, feed)
 
-            result["new_entries"] += 1
+            if first_check:
+                break  # only the latest episode on a brand-new feed
 
         db.update_feed(feed_id, last_checked=datetime.now(timezone.utc).isoformat(),
-                       last_entry_id=new_last_id or last_entry_id)
+                       last_entry_id=newest_id or last_entry_id)
 
     except Exception as exc:
         result["errors"].append(str(exc))
@@ -127,71 +142,28 @@ def check_feed(feed_id: str, trigger_jobs: bool = True) -> dict:
 
 
 def _queue_entry_job(entry: dict, feed: dict) -> None:
-    """Download the episode audio and queue a transcription+summarization job."""
+    """Queue a feed_episode job (download → transcribe → summarize) on the worker."""
     import db
-    import httpx
-    import tempfile
-    import asyncio
+    from jobs import get_worker
 
-    entry_id = entry["id"]
-    audio_url = entry.get("audio_url", "")
-    if not audio_url:
-        return
-
-    def _run():
-        try:
-            db.update_feed_entry_status(entry_id, "downloading")
-
-            # Download audio to temp file
-            with httpx.stream("GET", audio_url, follow_redirects=True, timeout=300) as resp:
-                resp.raise_for_status()
-                suffix = Path(audio_url.split("?")[0]).suffix or ".mp3"
-                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                    for chunk in resp.iter_bytes(chunk_size=65536):
-                        tmp.write(chunk)
-                    tmp_path = Path(tmp.name)
-
-            # Import here to avoid circular dependency
-            from main import AUDIO_CACHE, _jobs, _lock, _run_transcription
-            import json
-
-            job_id = str(uuid.uuid4())
-            audio_path = AUDIO_CACHE / f"{job_id}{suffix}"
-            tmp_path.rename(audio_path)
-
-            sidecar = AUDIO_CACHE / f"{job_id}.json"
-            sidecar.write_text(json.dumps({
-                "job_id":      job_id,
-                "filename":    entry.get("title", "podcast") + suffix,
-                "audio_file":  audio_path.name,
-                "size":        audio_path.stat().st_size,
-                "uploaded_at": datetime.now(timezone.utc).isoformat(),
-                "feed_id":     feed.get("id"),
-                "entry_id":    entry_id,
-            }))
-
-            with _lock:
-                _jobs[job_id] = {
-                    "status":        "pending",
-                    "status_detail": "",
-                    "result":        None,
-                    "segments":      [],
-                    "language":      "",
-                    "error":         None,
-                    "filename":      entry.get("title", "podcast") + suffix,
-                    "audio_path":    str(audio_path),
-                }
-
-            db.update_feed_entry_status(entry_id, "processing", job_id)
-            _run_transcription(job_id, audio_path)
-            db.update_feed_entry_status(entry_id, "done", job_id)
-
-        except Exception as exc:
-            logger.error("Error queuing feed entry %s: %s", entry_id, exc)
-            db.update_feed_entry_status(entry_id, "error")
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
+    job = db.create_job(
+        job_type="feed_episode",
+        config={
+            "feed_entry_id": entry["id"],
+            "audio_url": entry.get("audio_url", ""),
+            "mode": feed.get("summarize_mode") or "summary",
+        },
+        source_type="feed",
+        source_ref=entry.get("audio_url", ""),
+        source_title=entry.get("title") or "Podcast episode",
+    )
+    db.update_feed_entry_status(entry["id"], "processing", job["id"])
+    worker = get_worker()
+    if worker:
+        worker.enqueue(job["id"])
+    else:
+        db.fail_job(job["id"], "Job worker not available")
+        db.update_feed_entry_status(entry["id"], "error", job["id"])
 
 
 def start(get_feeds_fn=None) -> None:
@@ -216,17 +188,13 @@ def start(get_feeds_fn=None) -> None:
         def _poll_all():
             import db
             for feed in db.list_feeds():
-                last = feed.get("last_checked")
-                interval = feed.get("check_interval", 3600)
-                if last:
-                    elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(
-                        last if last.endswith("Z") else last + "Z"
-                    )).total_seconds()
-                    if elapsed < interval:
-                        continue
                 try:
+                    last = parse_timestamp(feed.get("last_checked"))
+                    interval = feed.get("check_interval") or 3600
+                    if last and (datetime.now(timezone.utc) - last).total_seconds() < interval:
+                        continue
                     check_feed(feed["id"])
-                except Exception as exc:
+                except Exception as exc:  # one bad feed must not stop the others
                     logger.error("Poll error for feed %s: %s", feed["id"], exc)
 
         _scheduler.add_job(_poll_all, "interval", minutes=15, id="poll_all_feeds",

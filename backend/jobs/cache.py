@@ -200,6 +200,8 @@ async def fetch_og_image(url: str) -> str:
                 return ""
 
             image_url = match.group(1)
+            if not image_url.startswith(("http://", "https://")):
+                return ""
 
             # Fetch the image
             img_resp = await client.get(image_url, timeout=10)

@@ -63,6 +63,14 @@ install-ui:
 download:
     cd backend && uv run python download_models.py
 
+# Run the backend test suite (inside the project venv, with test extras)
+test *args:
+    cd backend && uv run --extra test python -m pytest -q {{ args }}
+
+# Type-check the frontend
+check-ui:
+    cd frontend && npx tsc -b
+
 # Run only the API server with hot-reload (no model pre-download — use when model already cached)
 # Uses `python -m uvicorn` so reload subprocesses inherit the correct venv Python.
 # Note: --reload-exclude requires absolute paths for directory exclusions to work.

@@ -1,4 +1,4 @@
-import type { AppInfo, AudioModelMap, Capabilities, ChatMessage, EnhancementOptions, Feed, FeedEntry, FileMeta, HistoryEntry, Job, OllamaModel, OllamaModelInfo, PipelineSession, Prompt, Settings, SettingsUpdateResponse, TTSStatus, TTSVoiceMap, YouTubeDownloadJob, YouTubeVideoInfo } from '../types';
+import type { ActiveJobCounts, AudioModelMap, Capabilities, ChatMessage, EnhancementOptions, Feed, FeedEntry, FileMeta, HistoryEntry, Job, OllamaModel, OllamaModelInfo, PipelineSession, PersistentJob, Prompt, Settings, SettingsUpdateResponse, TTSStatus, TTSVoiceMap, YouTubeDownloadJob, YouTubeVideoInfo } from '../types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
@@ -11,16 +11,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 // ── Engine ─────────────────────────────────────────────────────────────────
 
-export function getInfo(): Promise<AppInfo> {
-  return request<AppInfo>('/api/info');
-}
-
 export function getCapabilities(): Promise<Capabilities> {
   return request<Capabilities>('/api/capabilities');
-}
-
-export function getReady(): Promise<{ status: string; message: string }> {
-  return request('/api/ready');
 }
 
 // ── Transcription ──────────────────────────────────────────────────────────
@@ -239,10 +231,6 @@ export function checkFeedNow(feedId: string): Promise<{ status: string }> {
 }
 
 // ── Speaker diarization ────────────────────────────────────────────────────
-
-export function getDiarizeStatus(): Promise<{ available: boolean; reason: string; token_configured: boolean }> {
-  return request('/api/diarize/status');
-}
 
 export function diarizeJob(jobId: string): Promise<{ segments: import('../types').Segment[]; diarization: { speaker: string; start: number; end: number }[] }> {
   return request(`/api/diarize/${jobId}`, { method: 'POST' });
@@ -692,7 +680,6 @@ export function chat(
 
 // ── Persistent Jobs API ────────────────────────────────────────────────────
 
-import type { ActiveJobCounts, CacheEntry, CacheStats, PersistentJob } from '../types';
 
 export interface ListJobsParams {
   status?: string;
@@ -765,28 +752,5 @@ export function createBatchJobs(req: BatchJobRequest): Promise<{
   });
 }
 
-export function cancelBatch(batchId: string): Promise<{ cancelled: number }> {
-  return request<{ cancelled: number }>(`/api/jobs/batch/${batchId}`, { method: 'DELETE' });
-}
-
 // ── Extraction Cache API ───────────────────────────────────────────────────
 
-export function getCacheEntry(contentHash: string): Promise<CacheEntry> {
-  return request<CacheEntry>(`/api/cache/${contentHash}`);
-}
-
-export function invalidateCache(contentHash: string): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/api/cache/${contentHash}`, { method: 'DELETE' });
-}
-
-export function getCacheStats(): Promise<CacheStats> {
-  return request<CacheStats>('/api/cache');
-}
-
-export function lookupCache(sourceType: string, sourceRef: string): Promise<CacheEntry> {
-  return request<CacheEntry>('/api/cache/lookup', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source_type: sourceType, source_ref: sourceRef }),
-  });
-}

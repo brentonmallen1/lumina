@@ -24,6 +24,7 @@ const TYPE_LABELS: Record<PersistentJobType, string> = {
   extract: 'Extract',
   summarize: 'Summarize',
   download: 'Download',
+  feed_episode: 'Podcast episode',
 };
 
 const TYPE_ICONS: Record<PersistentJobType, string> = {
@@ -32,6 +33,7 @@ const TYPE_ICONS: Record<PersistentJobType, string> = {
   extract: '📄',
   summarize: '📝',
   download: '📥',
+  feed_episode: '🎧',
 };
 
 export default function Jobs() {
@@ -337,7 +339,13 @@ function JobCard({ job, expanded, onClick, onCancel, onRetry, formatTime }: JobC
           {job.result && (
             <>
               <div className="job-detail-label">Result</div>
-              <div className="job-result">{job.result}</div>
+              <div className="job-result">
+                {job.result}
+                {job.result_truncated && '…'}
+              </div>
+              {job.result_truncated && (
+                <p className="job-pending-msg">Preview only — open the job to see the full result.</p>
+              )}
             </>
           )}
           {!job.error && !job.result && (

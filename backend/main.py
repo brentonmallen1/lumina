@@ -92,9 +92,15 @@ def _api_key() -> str:
 _ENGINE_SETTINGS = {"transcription_engine", "whisper_model_size", "compute_type", "language"}
 
 # ── Authentication ─────────────────────────────────────────────────────────
-def verify_auth(credentials: HTTPBasicCredentials | None = Depends(security)) -> bool:
-    """Verify HTTP Basic Auth credentials if auth is enabled."""
-    if not _auth_enabled():
+def verify_auth(
+    request: Request,
+    credentials: HTTPBasicCredentials | None = Depends(security),
+) -> bool:
+    """Verify HTTP Basic Auth credentials if auth is enabled.
+
+    Requests already authenticated by API key (see auth_middleware) pass.
+    """
+    if not _auth_enabled() or getattr(request.state, "api_key_ok", False):
         return True
 
     pwd = _auth_password()
@@ -169,24 +175,52 @@ def _load_engine_background() -> None:
 
 
 def _purge_old_audio() -> None:
-    """Delete audio files (and their sidecars) older than audio_cache_ttl_hours."""
-    ttl = int(_settings.get("audio_cache_ttl_hours", "72"))
+    """Delete audio files (and their sidecars) older than audio_cache_ttl_hours,
+    except files that queued or running jobs and live pipeline sessions still use."""
+    ttl = int(_settings.get("audio_cache_ttl_hours", "72") or 0)
     if ttl <= 0:
         return
+    in_use: set[str] = set()
+    for job in db.get_jobs_by_status(["pending", "queued", "running"]):
+        if job.get("input_file"):
+            in_use.add(Path(job["input_file"]).name)
+            in_use.add(Path(job["input_file"]).stem + ".json")
+    with _lock:
+        for session in _pipeline_sessions.values():
+            for key in ("original_file", "current_file"):
+                if session.get(key):
+                    in_use.add(Path(session[key]).name)
+            for step in session.get("steps") or []:
+                in_use.add(Path(step.get("output_file", "")).name)
     cutoff = time.time() - (ttl * 3600)
     for f in list(AUDIO_CACHE.iterdir()):
         try:
-            if f.stat().st_mtime < cutoff:
+            if f.name not in in_use and f.stat().st_mtime < cutoff:
                 f.unlink(missing_ok=True)
         except OSError:
             pass
 
 
-async def _purge_loop() -> None:
-    _purge_old_audio()
-    while True:
-        await asyncio.sleep(3600)
+# Finished jobs and extraction-cache entries are kept for 30 days.
+_JOB_RETENTION_HOURS = 30 * 24
+_CACHE_RETENTION_HOURS = 30 * 24
+
+
+def _housekeeping() -> None:
+    try:
         _purge_old_audio()
+        jobs = db.cleanup_old_jobs(hours=_JOB_RETENTION_HOURS)
+        cache = db.cleanup_old_cache(hours=_CACHE_RETENTION_HOURS)
+        if jobs or cache:
+            print(f"[housekeeping] removed {jobs} old jobs, {cache} stale cache entries")
+    except Exception as exc:
+        print(f"[housekeeping] failed: {exc}")
+
+
+async def _purge_loop() -> None:
+    while True:
+        await asyncio.to_thread(_housekeeping)
+        await asyncio.sleep(3600)
 
 
 @asynccontextmanager
@@ -199,8 +233,9 @@ async def lifespan(_: FastAPI):
     thread = threading.Thread(target=_load_engine_background, daemon=True)
     thread.start()
 
-    if int(_settings.get("audio_cache_ttl_hours", "72")) > 0:
-        asyncio.create_task(_purge_loop())
+    # Hourly housekeeping (audio TTL, old jobs, stale cache). Always scheduled,
+    # so changing the TTL setting later takes effect without a restart.
+    housekeeping = asyncio.create_task(_purge_loop())
 
     # Start feed monitor (no-op if feedparser/apscheduler not installed)
     import feed_monitor
@@ -214,6 +249,7 @@ async def lifespan(_: FastAPI):
 
     yield
 
+    housekeeping.cancel()
     shutdown_worker()
     feed_monitor.stop()
 
@@ -224,12 +260,17 @@ from routers.llm import router as llm_router  # noqa: E402
 
 app.include_router(llm_router, dependencies=[Depends(verify_auth)])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The UI is served from this same origin (and proxied in dev), so cross-origin
+# access is off unless explicitly allowed — otherwise any website a user visits
+# could read this instance's API from the LAN.
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 # ── Auth middleware (covers static asset requests) ─────────────────────────
@@ -244,6 +285,7 @@ async def auth_middleware(request: Request, call_next):
             auth_hdr[7:] if auth_hdr.startswith("Bearer ") else ""
         )
         if candidate and secrets.compare_digest(candidate.encode(), key.encode()):
+            request.state.api_key_ok = True
             return await call_next(request)
 
     if not _auth_enabled():
@@ -387,13 +429,24 @@ async def get_info(_: bool = Depends(verify_auth)):
 
 
 # ── Settings API ───────────────────────────────────────────────────────────
+# Secrets are never sent back to the browser; a set secret is shown as MASK and
+# a PUT that echoes MASK leaves the stored value untouched.
+_SECRET_KEYS = {"auth_password", "api_key", "hf_token", "youtube_cookies"}
+_SECRET_MASK = "••••••••"
+
+
+def _masked(settings: dict[str, str]) -> dict[str, str]:
+    return {k: (_SECRET_MASK if k in _SECRET_KEYS and v else v) for k, v in settings.items()}
+
+
 @app.get("/api/settings")
 async def get_settings(_: bool = Depends(verify_auth)):
-    return get_all_settings()
+    return _masked(get_all_settings())
 
 
 @app.put("/api/settings")
 async def put_settings(updates: dict[str, str], _: bool = Depends(verify_auth)):
+    updates = {k: v for k, v in updates.items() if not (k in _SECRET_KEYS and v == _SECRET_MASK)}
     old = get_all_settings()
     try:
         new = db_update_settings(updates)
@@ -410,7 +463,7 @@ async def put_settings(updates: dict[str, str], _: bool = Depends(verify_auth)):
         if k in updates
     )
 
-    return {"settings": new, "restart_required": engine_changed}
+    return {"settings": _masked(new), "restart_required": engine_changed}
 
 
 @app.post("/api/reload-engine")
@@ -628,9 +681,12 @@ async def create_feed(body: FeedCreate, _: bool = Depends(verify_auth)):
     if not available:
         raise HTTPException(status_code=503, detail=reason)
 
-    # Validate URL and fetch initial title
+    if not feed_monitor._is_http_url(body.url):
+        raise HTTPException(status_code=400, detail="Feed URL must start with http:// or https://")
+
+    # Validate URL and fetch initial title (network I/O — keep it off the event loop)
     try:
-        parsed = feedparser.parse(body.url)
+        parsed = await asyncio.to_thread(feedparser.parse, body.url)
         title = parsed.feed.get("title", "") or ""
     except Exception:
         title = ""
@@ -788,70 +844,6 @@ async def tts_synthesize(req: TTSSynthesizeRequest, _: bool = Depends(verify_aut
     return Response(content=audio_bytes, media_type="audio/wav")
 
 
-def _run_transcription(
-    job_id: str,
-    audio_path: Path,
-    options: EnhancementOptions | None = None,
-) -> None:
-    enhanced = audio_path
-
-    # Run enhancement pipeline first (if any stages are active)
-    if options and options.any_active:
-        def _status(phase: str, detail: str) -> None:
-            with _lock:
-                _jobs[job_id]["status"]        = "enhancing"
-                _jobs[job_id]["status_detail"] = detail
-
-        try:
-            pipeline = AudioPipeline()
-            enhanced = pipeline.run_sync(audio_path, options, _status)
-        except Exception as exc:
-            with _lock:
-                _jobs[job_id]["status"] = "error"
-                _jobs[job_id]["error"]  = f"Enhancement failed: {exc}"
-            return
-
-    with _lock:
-        _jobs[job_id]["status"] = "processing"
-
-    try:
-        raw = _engine.transcribe(str(enhanced))
-        # Engines return a dict with text + segments; handle legacy str just in case
-        if isinstance(raw, dict):
-            text     = raw.get("text", "")
-            segments = raw.get("segments", [])
-            language = raw.get("language", "")
-        else:
-            text     = raw
-            segments = []
-            language = ""
-
-        # Persist segments in sidecar for SRT/VTT export
-        sidecar = AUDIO_CACHE / f"{job_id}.json"
-        if sidecar.exists():
-            try:
-                meta = json.loads(sidecar.read_text())
-                meta["segments"] = segments
-                meta["language"] = language
-                sidecar.write_text(json.dumps(meta))
-            except Exception:
-                pass
-
-        with _lock:
-            _jobs[job_id]["status"]   = "done"
-            _jobs[job_id]["result"]   = text
-            _jobs[job_id]["segments"] = segments
-            _jobs[job_id]["language"] = language
-    except Exception as exc:
-        traceback.print_exc()
-        with _lock:
-            _jobs[job_id]["status"] = "error"
-            _jobs[job_id]["error"]  = str(exc) or repr(exc)
-    finally:
-        if enhanced != audio_path:
-            enhanced.unlink(missing_ok=True)
-
-
 def _run_enhancement(
     job_id: str,
     audio_path: Path,
@@ -955,8 +947,9 @@ async def transcribe(
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
     }))
 
-    # Create DB job with enhancement config
+    # Create DB job with the same ID as the stored file and sidecar
     job = db.create_job(
+        job_id=job_id,
         job_type="transcribe",
         config={
             "enhancement": {
@@ -972,7 +965,6 @@ async def transcribe(
         source_title=file.filename,
         input_file=audio_file,
     )
-    job_id = job["id"]
 
     # Enqueue to worker
     from jobs import get_worker
@@ -1021,7 +1013,12 @@ async def list_jobs(
     limit: int = Query(50, ge=1, le=200),
     _: bool = Depends(verify_auth),
 ):
-    """List jobs with optional filters."""
+    """List jobs with optional filters.
+
+    List entries are summaries: results are cut to a preview and bulky
+    result_meta keys (transcripts, segments, reasoning) are dropped — fetch
+    GET /api/jobs/{id} for the full job.
+    """
     status_filter = status.split(",") if status else None
     jobs = db.list_jobs(
         status=status_filter,
@@ -1029,7 +1026,21 @@ async def list_jobs(
         batch_id=batch_id,
         limit=limit,
     )
-    return {"jobs": jobs}
+    return {"jobs": [_job_summary(j) for j in jobs]}
+
+
+_PREVIEW_CHARS = 2000
+_BULKY_META = {"extracted_text", "segments", "reasoning", "data", "diarization", "source_meta"}
+
+
+def _job_summary(job: dict) -> dict:
+    result = job.get("result") or ""
+    return {
+        **job,
+        "result": result[:_PREVIEW_CHARS] if result else job.get("result"),
+        "result_truncated": len(result) > _PREVIEW_CHARS,
+        "result_meta": {k: v for k, v in (job.get("result_meta") or {}).items() if k not in _BULKY_META},
+    }
 
 
 @app.get("/api/jobs/active")
@@ -1069,13 +1080,7 @@ async def retry_job(job_id: str, _: bool = Depends(verify_auth)):
     if job["status"] not in ("error", "cancelled"):
         raise HTTPException(status_code=400, detail="Can only retry failed or cancelled jobs")
 
-    # Reset job status
-    db.update_job_status(job_id, "pending", "Retrying...")
-
-    # Clear error field
-    with db.get_connection() as conn:
-        conn.execute("UPDATE jobs SET error = NULL, result = NULL WHERE id = ?", (job_id,))
-        conn.commit()
+    db.reset_job_for_retry(job_id)
 
     # Re-enqueue
     worker = get_worker()
@@ -1102,6 +1107,9 @@ async def create_single_job(
 ):
     """Create a single job."""
     from jobs import get_worker
+
+    if request.job_type not in db.JOB_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown job type: {request.job_type}")
 
     job = db.create_job(
         job_type=request.job_type,
@@ -1257,12 +1265,30 @@ async def get_audio(job_id: str, _: bool = Depends(verify_auth)):
     return FileResponse(audio_path, media_type="audio/mpeg", filename=filename)
 
 
-@app.get("/api/export/{job_id}")
-async def export_txt(job_id: str, _: bool = Depends(verify_auth)):
+def _transcription_job(job_id: str) -> dict:
+    """A transcription as a plain dict, from the DB job queue or the legacy
+    in-memory store: {status, result, segments, filename, audio_path, db}."""
+    db_job = db.get_job(job_id)
+    if db_job:
+        meta = db_job.get("result_meta") or {}
+        return {
+            "status":     db_job["status"],
+            "result":     db_job.get("result") or "",
+            "segments":   meta.get("segments") or [],
+            "filename":   db_job.get("source_title") or db_job.get("source_ref") or "",
+            "audio_path": str(AUDIO_CACHE / db_job["input_file"]) if db_job.get("input_file") else "",
+            "db":         True,
+        }
     with _lock:
         job = _jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    return {**job, "db": False}
+
+
+@app.get("/api/export/{job_id}")
+async def export_txt(job_id: str, _: bool = Depends(verify_auth)):
+    job = _transcription_job(job_id)
     if job["status"] != "done":
         raise HTTPException(status_code=400, detail="Transcription not complete")
 
@@ -1291,10 +1317,7 @@ def _fmt_vtt_time(seconds: float) -> str:
 
 def _get_job_segments(job_id: str) -> tuple[dict, list[dict]]:
     """Return (job, segments) — falls back to sidecar for segments if needed."""
-    with _lock:
-        job = _jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _transcription_job(job_id)
     if job.get("status") != "done":
         raise HTTPException(status_code=400, detail="Transcription not complete")
     segments = job.get("segments") or []
@@ -1361,10 +1384,7 @@ class ClipRequest(BaseModel):
 @app.post("/api/clip/{job_id}")
 async def extract_clip(job_id: str, req: ClipRequest, _: bool = Depends(verify_auth)):
     """Extract a time-range clip from an uploaded audio file using ffmpeg."""
-    with _lock:
-        job = _jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _transcription_job(job_id)
 
     audio_path = Path(job.get("audio_path", ""))
     if not audio_path.exists():
@@ -1393,9 +1413,11 @@ async def extract_clip(job_id: str, req: ClipRequest, _: bool = Depends(verify_a
         str(clip_path),
     ]
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
+        await asyncio.to_thread(subprocess.run, cmd, check=True, capture_output=True, timeout=600)
     except subprocess.CalledProcessError as exc:
         raise HTTPException(status_code=500, detail=f"ffmpeg error: {exc.stderr.decode()[:200]}")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="ffmpeg timed out")
 
     return {"clip_id": clip_id, "filename": clip_name, "job_id": job_id}
 
@@ -1403,7 +1425,9 @@ async def extract_clip(job_id: str, req: ClipRequest, _: bool = Depends(verify_a
 @app.get("/api/clip/{job_id}/{clip_id}/download")
 async def download_clip(job_id: str, clip_id: str, _: bool = Depends(verify_auth)):
     """Download a previously extracted clip."""
-    # Find the clip file — any format suffix
+    # IDs are server-generated; reject anything that could act as a glob pattern.
+    if not all(c.isalnum() or c == "-" for c in job_id + clip_id):
+        raise HTTPException(status_code=404, detail="Clip not found")
     matches = list(AUDIO_CACHE.glob(f"{job_id}_clip_{clip_id}.*"))
     if not matches:
         raise HTTPException(status_code=404, detail="Clip not found")
@@ -1438,10 +1462,7 @@ async def diarize_job(
     Returns the diarization result (list of speaker segments) synchronously.
     The job's transcript segments are merged with speaker labels and stored.
     """
-    with _lock:
-        job = _jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _transcription_job(job_id)
     if job.get("status") != "done":
         raise HTTPException(status_code=400, detail="Transcription must be complete before diarizing")
 
@@ -1473,9 +1494,12 @@ async def diarize_job(
     segments = job.get("segments", [])
     merged = diarz.merge_with_transcript(raw_diarization, segments)
 
-    with _lock:
-        _jobs[job_id]["segments"] = merged
-        _jobs[job_id]["diarization"] = raw_diarization
+    if job["db"]:
+        db.update_job_result_meta(job_id, {"segments": merged, "diarization": raw_diarization})
+    else:
+        with _lock:
+            _jobs[job_id]["segments"] = merged
+            _jobs[job_id]["diarization"] = raw_diarization
 
     # Persist merged segments to sidecar
     sidecar = AUDIO_CACHE / f"{job_id}.json"
@@ -1541,19 +1565,24 @@ async def retranscribe(
         upsample =req.enhance_upsample,
     )
 
-    new_job_id = str(uuid.uuid4())
-    with _lock:
-        _jobs[new_job_id] = {
-            "status":        "pending",
-            "status_detail": "",
-            "result":        None,
-            "error":         None,
-            "filename":      meta.get("filename"),
-            "audio_path":    str(audio_path),
-        }
-
-    background_tasks.add_task(_run_transcription, new_job_id, audio_path, opts)
-    return {"job_id": new_job_id}
+    job = db.create_job(
+        job_type="transcribe",
+        config={"enhancement": {
+            "normalize": opts.normalize, "denoise": opts.denoise, "isolate": opts.isolate,
+            "separate": opts.separate, "upsample": opts.upsample,
+        }},
+        source_type="file",
+        source_ref=meta.get("filename"),
+        source_title=meta.get("filename"),
+        input_file=meta["audio_file"],
+    )
+    from jobs import get_worker
+    worker = get_worker()
+    if worker:
+        worker.enqueue(job["id"])
+    else:
+        db.fail_job(job["id"], "Job worker not available")
+    return {"job_id": job["id"]}
 
 
 # ── Audio Enhancement ──────────────────────────────────────────────────────
@@ -1951,19 +1980,21 @@ async def transcribe_pipeline_audio(
         "pipeline_session": session_id,
     }))
 
-    with _lock:
-        _jobs[job_id] = {
-            "status":        "pending",
-            "status_detail": "",
-            "result":        None,
-            "segments":      [],
-            "language":      None,
-            "error":         None,
-            "filename":      session.get("filename"),
-            "audio_path":    str(audio_path),
-        }
-
-    background_tasks.add_task(_run_transcription, job_id, audio_path, EnhancementOptions())
+    db.create_job(
+        job_id=job_id,
+        job_type="transcribe",
+        config={},
+        source_type="file",
+        source_ref=session.get("filename"),
+        source_title=session.get("filename"),
+        input_file=audio_path.name,
+    )
+    from jobs import get_worker
+    worker = get_worker()
+    if worker:
+        worker.enqueue(job_id)
+    else:
+        db.fail_job(job_id, "Job worker not available")
 
     with _lock:
         _pipeline_sessions[session_id]["transcription"] = job_id

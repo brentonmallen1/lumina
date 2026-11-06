@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { Suspense, useEffect, useState, useRef } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { Clock, Settings, Zap, Sun, Moon, Loader, ListTodo, ExternalLink, X, AlertTriangle } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
@@ -184,7 +184,10 @@ export default function Layout() {
       </header>
 
       <main id="main-content" className="layout-main">
-        <Outlet />
+        {/* Pages are lazy-loaded; keep the header visible while one loads. */}
+        <Suspense fallback={null}>
+          <Outlet />
+        </Suspense>
       </main>
     </div>
   );

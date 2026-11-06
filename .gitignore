@@ -13,3 +13,4 @@ frontend/dist/
 .history/
 .claude/
 backend/data
+frontend/*.tsbuildinfo
