@@ -201,6 +201,8 @@ export interface Prompt {
 
 export interface OllamaModelInfo {
   context_length: number | null;
+  /** num_ctx baked into the Modelfile (e.g. a "-128k" variant), if any. */
+  modelfile_num_ctx?: number | null;
   parameter_size: string | null;
   capabilities:   string[];
   /** Per-model override from settings, if any. */

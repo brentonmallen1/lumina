@@ -8,7 +8,7 @@ Check the header badge next to the model name: it shows the context window in us
 
 ## Ollama runs out of memory, or a model loads slowly
 
-The context window is the main VRAM cost after the weights. Set a smaller per-model context in Settings → Ollama, or a global cap. Lumina keeps one fixed window per model, so the model isn't reloaded between requests. If `ollama ps` shows a reload on every request, check that nothing else is calling the same model with a different `num_ctx`.
+The context window is the main VRAM cost after the weights. Slide the model's context window down in Settings → Ollama, or set a global cap. Lumina keeps one fixed window per model, so the model isn't reloaded between requests. If `ollama ps` shows a reload on every request, check that nothing else is calling the same model with a different `num_ctx`.
 
 ## Results include no reasoning / thinking does nothing
 

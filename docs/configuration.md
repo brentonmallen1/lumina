@@ -29,7 +29,7 @@ Secrets (password, API key, HuggingFace token, YouTube cookies) are never sent b
 2. the `num_ctx` set in the model's Modelfile (for variants like `gemma4:31b-128k`);
 3. the model's maximum context.
 
-The optional global cap is applied last. The window stays fixed per model, so Ollama never reloads the model between requests. Content that doesn't fit is processed in parts automatically (see [Modes](modes.md#long-content)). Larger windows use more VRAM. If Ollama runs out of memory, set a lower value for that model.
+The optional global cap is applied last. In Settings → Ollama these are sliders with stops from 8K up to the model's maximum, with the default stop marked. The window stays fixed per model, so Ollama never reloads the model between requests. Content that doesn't fit is processed in parts automatically (see [Modes](modes.md#long-content)). Larger windows use more VRAM. If Ollama runs out of memory, slide that model's window down a stop or two.
 
 ## Transcription
 

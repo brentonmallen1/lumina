@@ -2,8 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { ArrowLeft, Save, RefreshCw, AlertTriangle, Check, Wifi, WifiOff, Loader, Download, Play } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import * as api from '../api/client';
+import TokenSlider, { TOKEN_STOPS, contextStops, formatTokens } from '../components/TokenSlider';
 import type { AudioModelMap, Capabilities, OllamaModel, OllamaModelInfo, Settings as SettingsType, TTSStatus, TTSVoiceMap } from '../types';
 import './Settings.css';
+
+/** Output budget stops; 32K is the default. */
+const OUTPUT_STOPS = [8192, 16384, 32768, 65536];
 
 /** The API masks stored secrets with this value; sending it back keeps them unchanged. */
 const SECRET_MASK = '••••••••';
@@ -306,6 +310,17 @@ export default function Settings() {
 
   const d = draft as SettingsType;
 
+  // Token sliders: the model's own default window, and what will actually be used.
+  const modelDefaultContext = modelInfo
+    ? (modelInfo.modelfile_num_ctx ?? modelInfo.context_length ?? 32768)
+    : null;
+  const effectiveContext = (() => {
+    if (!modelDefaultContext || !d.ollama_model) return null;
+    const chosen = contextOverrides()[d.ollama_model] ?? modelDefaultContext;
+    const cap = parseInt(d.ollama_context_cap || '', 10);
+    return cap > 0 ? Math.min(chosen, cap) : chosen;
+  })();
+
   return (
     <div className="settings-page">
       <div className="settings-inner">
@@ -582,36 +597,24 @@ export default function Settings() {
                       <label className="settings-label" htmlFor="ollama-context">
                         Context window for {d.ollama_model}
                         <span className="settings-label-hint">
-                          {modelInfo?.context_length
-                            ? `Model maximum: ${modelInfo.context_length.toLocaleString()} tokens. Leave blank to use it. Larger windows use more VRAM.`
-                            : 'Leave blank to use the model\'s own maximum. Larger windows use more VRAM.'}
+                          How much text the model reads at once. The default is this model&apos;s own setting
+                          {modelInfo?.context_length ? ` (max ${formatTokens(modelInfo.context_length)})` : ''}.
+                          Larger windows use more VRAM.
                         </span>
                       </label>
-                      <div className="settings-test-row">
-                        <input
+                      {modelInfo && modelDefaultContext ? (
+                        <TokenSlider
                           id="ollama-context"
-                          type="number"
-                          className="settings-input settings-input--narrow"
-                          min="2048"
-                          step="1024"
-                          placeholder={modelInfo?.context_length ? String(modelInfo.context_length) : 'model default'}
-                          value={contextOverrides()[d.ollama_model] ?? ''}
-                          onChange={e => setContextOverride(d.ollama_model, parseInt(e.target.value, 10) || null)}
+                          stops={contextStops(modelInfo.context_length, modelDefaultContext)}
+                          value={contextOverrides()[d.ollama_model] ?? modelDefaultContext}
+                          defaultValue={modelDefaultContext}
+                          onChange={v => setContextOverride(d.ollama_model, v === modelDefaultContext ? null : v)}
                         />
-                        {contextOverrides()[d.ollama_model] !== undefined && (
-                          <button
-                            className="settings-test-btn"
-                            type="button"
-                            onClick={() => setContextOverride(d.ollama_model, null)}
-                          >
-                            Reset to model default
-                          </button>
-                        )}
-                      </div>
+                      ) : (
+                        <p className="settings-label-hint">Loading model details from Ollama…</p>
+                      )}
                       {modelInfo && modelInfo.capabilities.length > 0 && (
-                        <p className="settings-label-hint" style={{ marginTop: 6 }}>
-                          Capabilities: {modelInfo.capabilities.join(', ')}
-                        </p>
+                        <p className="settings-label-hint">Capabilities: {modelInfo.capabilities.join(', ')}</p>
                       )}
                     </div>
                   )}
@@ -619,40 +622,41 @@ export default function Settings() {
                   {/* Output budget */}
                   <div className="settings-field">
                     <label className="settings-label" htmlFor="ollama-output-budget">
-                      Output budget (tokens)
+                      Output budget
                       <span className="settings-label-hint">
-                        Room reserved for each reply, reasoning included. Content beyond the remaining
-                        context is processed in parts automatically.
+                        Room reserved for each reply, reasoning included. Content that doesn&apos;t fit in the
+                        rest of the window is processed in parts automatically.
                       </span>
                     </label>
-                    <input
+                    <TokenSlider
                       id="ollama-output-budget"
-                      type="number"
-                      className="settings-input settings-input--narrow"
-                      min="1024"
-                      step="1024"
-                      value={d.ollama_output_budget ?? '32768'}
-                      onChange={e => set('ollama_output_budget', e.target.value)}
+                      stops={OUTPUT_STOPS}
+                      value={parseInt(d.ollama_output_budget || '32768', 10)}
+                      defaultValue={32768}
+                      onChange={v => set('ollama_output_budget', String(v ?? 32768))}
                     />
+                    {effectiveContext && parseInt(d.ollama_output_budget || '32768', 10) > effectiveContext / 2 && (
+                      <p className="settings-label-hint">
+                        Limited to {formatTokens(effectiveContext / 2)} for {d.ollama_model} — half its context window.
+                      </p>
+                    )}
                   </div>
 
                   {/* Global cap */}
                   <div className="settings-field">
                     <label className="settings-label" htmlFor="ollama-context-cap">
-                      Global context cap (optional)
+                      Global context cap
                       <span className="settings-label-hint">
-                        Upper limit applied to every model, e.g. to fit a smaller GPU. Blank = no cap.
+                        Upper limit for every model, e.g. to fit a smaller GPU. Off uses each model&apos;s own window.
                       </span>
                     </label>
-                    <input
+                    <TokenSlider
                       id="ollama-context-cap"
-                      type="number"
-                      className="settings-input settings-input--narrow"
-                      min="2048"
-                      step="1024"
-                      placeholder="none"
-                      value={d.ollama_context_cap ?? ''}
-                      onChange={e => set('ollama_context_cap', e.target.value)}
+                      stops={[...TOKEN_STOPS.slice(0, 6), null]}
+                      value={d.ollama_context_cap ? parseInt(d.ollama_context_cap, 10) : null}
+                      defaultValue={null}
+                      offLabel="Off"
+                      onChange={v => set('ollama_context_cap', v === null ? '' : String(v))}
                     />
                   </div>
 

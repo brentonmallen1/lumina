@@ -1,0 +1,69 @@
+/* ── Stepped token slider ────────────────────────────────────────────── */
+
+.token-slider {
+  --thumb: 16px;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.token-slider-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.token-slider-value {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.token-slider-badge {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.token-slider-input {
+  width: 100%;
+  margin: 6px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.token-slider-input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 8px;
+}
+
+.token-slider-ticks {
+  position: relative;
+  height: 18px;
+}
+
+.token-slider-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  padding: 0 2px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.token-slider-tick:hover { color: var(--text); }
+.token-slider-tick.is-default { text-decoration: underline dotted; text-underline-offset: 3px; }
+.token-slider-tick.active { color: var(--accent); font-weight: 600; }
+
+.token-slider--disabled { opacity: 0.55; }
+.token-slider--disabled .token-slider-input,
+.token-slider--disabled .token-slider-tick { cursor: not-allowed; }
