@@ -1,0 +1,101 @@
+/* ── Structured result renderers (lists, MTG upgrades) ───────────────── */
+
+.result-structured {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.result-structured-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.result-structured-title {
+  margin: 0 0 2px;
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.result-count {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.result-count--short { color: var(--warn-text); }
+
+.result-empty {
+  padding: 20px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.result-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.result-list-item {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.result-list-item:first-child { border-top: none; padding-top: 0; }
+
+.result-rank {
+  flex: 0 0 auto;
+  min-width: 2ch;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  color: var(--accent);
+  text-align: right;
+}
+
+.result-list-body { min-width: 0; flex: 1; }
+
+.result-list-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.result-list-title { font-weight: 600; }
+
+.result-list-detail {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.result-ts {
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
+a.result-ts:hover { color: var(--accent); border-color: var(--accent); }
+
+.result-subhead {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}

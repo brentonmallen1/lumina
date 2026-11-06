@@ -59,5 +59,6 @@ class VideoExtractor:
         return tmp
 
     def _transcribe(self, audio_path: Path) -> str:
-        result = self.engine.transcribe(str(audio_path))
-        return result.get("text", "") if isinstance(result, dict) else result
+        from .captions import segments_from_engine, to_paragraphs
+        # Timestamped paragraphs ([m:ss] …) so results and chat can cite moments.
+        return to_paragraphs(segments_from_engine(self.engine.transcribe(str(audio_path))))

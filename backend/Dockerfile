@@ -118,6 +118,10 @@ COPY --from=playwright-base /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
+# Deno: yt-dlp needs a JavaScript runtime to solve YouTube's player challenges.
+# Without it some formats (and occasionally captions) are unavailable.
+COPY --from=denoland/deno:bin-2.9.8 /deno /usr/local/bin/deno
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 # The virtualenv's Python binary symlinks into the uv-managed Python directory,
@@ -131,6 +135,15 @@ WORKDIR /app
 
 ENV TZ=UTC
 # Override with your local timezone, e.g. TZ=America/New_York
+
+# Persistent locations. These match the volume mounts in docker-compose.yml and
+# the Unraid template; without them the DB and models would live inside the
+# container and be lost on every update.
+ENV DATA_DIR=/data \
+    AUDIO_CACHE_DIR=/cache/audio \
+    HF_HOME=/models/hf \
+    WHISPER_DOWNLOAD_ROOT=/models/whisper \
+    TORCH_HOME=/models/torch
 
 # ── Application source ────────────────────────────────────────────────────────
 COPY backend/ .

@@ -4,15 +4,23 @@ import { Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import * as api from '../api/client';
 import type { HistoryEntry } from '../types';
+import ResultView from '../components/results/ResultView';
+import '../components/results/renderers';
+import { BUILTIN_OUTPUT_TYPES } from '../components/results/registry';
 import './History.css';
 
 const MODE_LABELS: Record<string, string> = {
   summary:         'Summary',
+  tldr:            'TL;DR',
   key_points:      'Key Points',
   mind_map:        'Mind Map',
   action_items:    'Action Items',
   q_and_a:         'Q&A',
   meeting_minutes: 'Meeting Minutes',
+  extract_list:    'Extract List',
+  recipe:          'Recipe',
+  recipe_jsonld:   'Recipe (JSON-LD)',
+  mtg_precon:      'MTG Precon Upgrade',
 };
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -166,9 +174,18 @@ export default function History() {
 
         {isOpen && (
           <div className="history-item-body">
-            <div className="history-result-text">
-              <ReactMarkdown>{entry.result}</ReactMarkdown>
-            </div>
+            {BUILTIN_OUTPUT_TYPES[entry.mode] ? (
+              <ResultView
+                text={entry.result}
+                outputType={BUILTIN_OUTPUT_TYPES[entry.mode]}
+                rendered
+                sourceUrl={entry.source === 'youtube' ? entry.source_detail : undefined}
+              />
+            ) : (
+              <div className="history-result-text">
+                <ReactMarkdown>{entry.result}</ReactMarkdown>
+              </div>
+            )}
             {entry.reasoning && (
               <details className="history-reasoning">
                 <summary className="history-reasoning-summary">

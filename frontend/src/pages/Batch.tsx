@@ -3,6 +3,9 @@ import { ArrowLeft, Layers, Upload, X, CheckCircle, AlertCircle, Loader, Play, T
 import { Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import * as api from '../api/client';
+import ResultView from '../components/results/ResultView';
+import '../components/results/renderers';
+import { BUILTIN_OUTPUT_TYPES } from '../components/results/registry';
 import './Batch.css';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -390,9 +393,13 @@ export default function Batch() {
                 {/* Expanded result (done) */}
                 {item.status === 'done' && item.expanded && (
                   <div className="batch-item-body">
-                    <div className="batch-result-text">
-                      <ReactMarkdown>{item.result}</ReactMarkdown>
-                    </div>
+                    {BUILTIN_OUTPUT_TYPES[mode] ? (
+                      <ResultView text={item.result} outputType={BUILTIN_OUTPUT_TYPES[mode]} rendered />
+                    ) : (
+                      <div className="batch-result-text">
+                        <ReactMarkdown>{item.result}</ReactMarkdown>
+                      </div>
+                    )}
                     {item.reasoning && (
                       <details className="batch-reasoning">
                         <summary className="batch-reasoning-summary">

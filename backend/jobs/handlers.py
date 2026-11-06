@@ -75,12 +75,10 @@ async def handle_transcribe(job: dict) -> dict | None:
     if engine is None:
         raise RuntimeError("Transcription engine not loaded")
 
-    # Run transcription in thread pool
-    result = await asyncio.to_thread(
-        engine.transcribe,
-        str(processed_path),
-        language=config.get("language") or None,
-    )
+    # Run transcription in thread pool. Engines take only the path (language
+    # comes from the engine's configuration); Canary/Qwen return plain text.
+    raw = await asyncio.to_thread(engine.transcribe, str(processed_path))
+    result = raw if isinstance(raw, dict) else {"text": raw or "", "segments": []}
 
     # Clean up enhanced temp file if different from original
     if processed_path != audio_path and processed_path.exists():

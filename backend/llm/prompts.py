@@ -27,9 +27,9 @@ PROMPTS: dict[str, dict[str, str]] = {
         ),
         "template": (
             "Summarize the following content clearly and concisely.\n\n"
-            "If a content title is provided at the top, use it to understand the structure and subject. "
-            "If the title or content indicates a \"top X\", ranked, or numbered list, include a **List Items** "
-            "section after the summary with each item and a brief description.\n\n"
+            "If source information (title, chapters, description) is provided at the top, use it to understand "
+            "the structure and subject. If the title or content indicates a \"top X\", ranked, or numbered list, "
+            "include a **List Items** section after the summary with each item and a brief description.\n\n"
             "{content}"
         ),
     },
@@ -118,24 +118,27 @@ PROMPTS: dict[str, dict[str, str]] = {
     "extract_list": {
         "name": "Extract List",
         "system": (
-            "You extract ranked or enumerated lists from content. "
-            "Output ONLY the list items — no intro, no summary, no extra sections. "
-            "If no list is present, say so clearly and stop."
+            "You extract ranked or enumerated lists (top-X countdowns, rankings, 'N best/worst', "
+            "numbered tips) from content. You are exhaustive and precise: every item, in the "
+            "original order, with the exact names used in the content. You output JSON only."
         ),
         "template": (
-            "Scan the following content for a ranked or numbered list. "
-            "Look for patterns like \"Number 15\", \"#1\", \"at number X\", \"coming in at X\", etc.\n\n"
-            "If a content title is provided at the top (e.g. \"Content title: Top 15 ...\"), use it to "
-            "infer the expected number of items and verify you found that many. "
-            "Videos sometimes include bonus or honorable mention items beyond the stated count — include those too.\n\n"
-            "If you find a list, output EVERY item in this exact format and nothing else:\n\n"
-            "**#[rank]. [Title]**\n"
-            "[One sentence: what happened or why it is notable]\n\n"
-            "Important:\n"
-            "- List ALL items — do not skip any\n"
-            "- Preserve the original order from the content (countdown 15→1 or count-up 1→15)\n"
-            "- Do not add headers, intros, or summaries\n\n"
-            "If no ranked list is present, respond only: \"No ranked list detected in this content.\"\n\n"
+            "Find the ranked or numbered list in the content below.\n\n"
+            "Use every signal available:\n"
+            "- The title often states the count (\"Top 15 …\") — set expected_count from it.\n"
+            "- Chapters, when present, frequently name each list item; use them to confirm items and timestamps.\n"
+            "- In transcripts, items are announced with phrases like \"number 7\", \"at number 3\", "
+            "\"coming in at\", \"and the number one spot goes to\".\n"
+            "- The description sometimes repeats the full list.\n\n"
+            "Rules:\n"
+            "- Include EVERY item; do not stop early. Keep the order used in the content "
+            "(countdowns stay countdowns).\n"
+            "- rank: the number the content gives the item (null if unnumbered).\n"
+            "- title: the item's name exactly as said/written (fix obvious caption misspellings of proper nouns).\n"
+            "- detail: one sentence on what it is or why it ranked there.\n"
+            "- timestamp: the [m:ss] marker where the item is introduced, as \"m:ss\" (null if unknown).\n"
+            "- Put bonus / honorable-mention items in honorable_mentions, not items.\n"
+            "- If there is no list, return found=false and empty arrays.\n\n"
             "{content}"
         ),
     },
@@ -151,7 +154,7 @@ PROMPTS: dict[str, dict[str, str]] = {
             "Extract and format the recipe from the following content.\n\n"
             "Look for recipe data in these places (in order of priority):\n"
             "1. 'Structured data (schema.org)' section — authoritative ingredients/instructions from the webpage\n"
-            "2. 'Source description' — video description may contain the official ingredients list\n"
+            "2. The 'Description' under Source information — a video description often has the official ingredients list\n"
             "3. Main content/transcript — spoken or written recipe details\n\n"
             "Cross-reference all sources. Note any discrepancies (e.g., different quantities, missing items).\n\n"
             "Output the recipe in this exact markdown format:\n\n"
@@ -186,7 +189,7 @@ PROMPTS: dict[str, dict[str, str]] = {
             "Extract the recipe from the following content and output it as schema.org/Recipe JSON-LD.\n\n"
             "Look for recipe data in these places (in order of priority):\n"
             "1. 'Structured data (schema.org)' section — authoritative ingredients/instructions from the webpage\n"
-            "2. 'Source description' — video description may contain the official ingredients list\n"
+            "2. The 'Description' under Source information — a video description often has the official ingredients list\n"
             "3. Main content/transcript — spoken or written recipe details\n\n"
             "Output a single JSON object with these exact fields:\n"
             '- "@context": "https://schema.org"\n'
@@ -297,6 +300,29 @@ RECIPE_JSONLD_SCHEMA = {
     "required": ["name", "recipeIngredient", "recipeInstructions"],
 }
 
+_LIST_ITEM = {
+    "type": "object",
+    "properties": {
+        "rank":      {"type": ["integer", "null"]},
+        "title":     {"type": "string"},
+        "detail":    {"type": "string"},
+        "timestamp": {"type": ["string", "null"]},
+    },
+    "required": ["title"],
+}
+
+EXTRACT_LIST_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "found":              {"type": "boolean"},
+        "list_title":         {"type": "string"},
+        "expected_count":     {"type": ["integer", "null"]},
+        "items":              {"type": "array", "items": _LIST_ITEM},
+        "honorable_mentions": {"type": "array", "items": _LIST_ITEM},
+    },
+    "required": ["found", "items"],
+}
+
 DEFAULT_META: dict = {"temperature": 0.7, "think": None, "format": None, "output_type": "markdown"}
 
 MODE_META: dict[str, dict] = {
@@ -306,7 +332,7 @@ MODE_META: dict[str, dict] = {
     "action_items":    {"temperature": 0.4},
     "q_and_a":         {"temperature": 0.6},
     "tldr":            {"temperature": 0.6},
-    "extract_list":    {"temperature": 0.2},
+    "extract_list":    {"temperature": 0.2, "format": EXTRACT_LIST_SCHEMA, "output_type": "json:list"},
     "recipe":          {"temperature": 0.3},
     "recipe_jsonld":   {"temperature": 0.1, "format": RECIPE_JSONLD_SCHEMA, "output_type": "json:recipe"},
     "meeting_minutes": {"temperature": 0.4},

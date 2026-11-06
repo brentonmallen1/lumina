@@ -19,7 +19,6 @@ text). When provided it is written to a temp file and passed to yt-dlp as
 
 import asyncio
 import contextlib
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -230,6 +229,45 @@ def download_audio(
     return output_file
 
 
+# Languages tried, in order, when no explicit language is requested.
+_FALLBACK_LANGS = ["en", "en-US", "en-GB"]
+# Preferred caption formats (json3 carries exact cue timing; vtt is the fallback).
+_CAPTION_EXTS = ("json3", "vtt")
+
+
+def _pick_caption_track(info: dict, language: str | None) -> tuple[dict, str, bool] | None:
+    """Choose the best caption track. Returns (track, lang, is_auto) or None.
+
+    Order: requested language → the video's original language → English;
+    for each, human-made subtitles beat auto-generated captions. For auto
+    captions, YouTube's "<lang>-orig" track is the untranslated original.
+    """
+    manual = info.get("subtitles") or {}
+    auto = info.get("automatic_captions") or {}
+    original = (info.get("language") or "").split("-")[0] or None
+
+    prefs: list[str] = []
+    for lang in [language, original, *_FALLBACK_LANGS]:
+        if lang and lang not in prefs:
+            prefs.append(lang)
+
+    def best(tracks: list[dict]) -> dict | None:
+        for ext in _CAPTION_EXTS:
+            for t in tracks:
+                if t.get("ext") == ext and t.get("url"):
+                    return t
+        return None
+
+    for lang in prefs:
+        for key in (lang, *[k for k in manual if k.split("-")[0] == lang]):
+            if key in manual and (t := best(manual[key])):
+                return t, key, False
+        for key in (f"{lang}-orig", lang):
+            if key in auto and (t := best(auto[key])):
+                return t, key, True
+    return None
+
+
 class YouTubeExtractor:
     def __init__(
         self,
@@ -247,104 +285,78 @@ class YouTubeExtractor:
 
     # ── Public ────────────────────────────────────────────────────────────────
 
-    async def extract_with_meta(self, url: str, on_status: StatusCallback) -> tuple[str, dict]:
-        """Extract the transcript plus video metadata (title, description, chapters…)."""
-        await on_status("extracting", "Fetching video info…")
-        meta: dict = {}
-        try:
-            summary = await asyncio.to_thread(get_video_info, url, self.cookies)
-            meta = source_meta_from_info(summary)
-            if meta.get("title"):
-                await on_status("extracting", f"Found: {meta['title'][:80]}")
-        except Exception:
-            await on_status("extracting", "Could not fetch video info — continuing…")
-        text = await self.extract(url, on_status)
-        return text, meta
-
     async def extract(self, url: str, on_status: StatusCallback) -> str:
-        if self.prefer_captions:
-            await on_status("extracting", "Checking for YouTube captions…")
-            try:
-                captions = await asyncio.to_thread(self._fetch_captions, url)
-                if captions:
-                    await on_status("extracting", "Captions found — using existing transcript")
-                    return captions
-            except Exception:
-                pass
-            await on_status("extracting", "Captions unavailable — falling back to audio transcription")
+        text, _meta = await self.extract_with_meta(url, on_status)
+        return text
 
+    async def extract_with_meta(self, url: str, on_status: StatusCallback) -> tuple[str, dict]:
+        """Timestamped transcript plus video metadata (title, description, chapters…).
+
+        One yt-dlp metadata request provides both the metadata and the caption
+        track URLs; audio is only downloaded when no usable captions exist.
+        """
+        await on_status("extracting", "Fetching video info…")
+        info, captions = await asyncio.to_thread(self._info_and_captions, url)
+        meta = source_meta_from_info(_info_summary(info))
+        if meta.get("title"):
+            await on_status("extracting", f"Found: {meta['title'][:80]}")
+
+        if captions:
+            text, lang, is_auto = captions
+            meta["transcript_source"] = f"{'auto-captions' if is_auto else 'captions'} ({lang})"
+            await on_status("extracting", f"Using {'auto-generated' if is_auto else 'uploaded'} captions ({lang})")
+            return text, meta
+
+        if self.prefer_captions:
+            await on_status("extracting", "No captions available — transcribing the audio instead")
         await on_status("extracting", "Downloading audio from YouTube…")
         audio_path, tmpdir = await asyncio.to_thread(self._download_audio, url)
-        await on_status("extracting", "Audio downloaded — preparing for transcription…")
-
         try:
-            await on_status("transcribing", "Running Whisper transcription — this may take a while…")
-            transcript = await asyncio.to_thread(self._transcribe, audio_path)
+            await on_status("transcribing", "Transcribing audio — this may take a while…")
+            text = await asyncio.to_thread(self._transcribe, audio_path)
             await on_status("transcribing", "Transcription complete")
-            return transcript
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+        meta["transcript_source"] = "audio transcription"
+        return text, meta
 
     # ── Private ───────────────────────────────────────────────────────────────
 
-    def _fetch_captions(self, url: str) -> str | None:
+    def _ydl_opts(self, cookiefile: str | None) -> dict:
+        opts: dict = {
+            "quiet":          True,
+            "no_warnings":    True,
+            "skip_download":  True,
+            "socket_timeout": 30,
+            "retries":        3,
+        }
+        if cookiefile:
+            opts["cookiefile"] = cookiefile
+        return opts
+
+    def _info_and_captions(self, url: str) -> tuple[dict, tuple[str, str, bool] | None]:
         import yt_dlp
+        from .captions import caption_track_to_text
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _cookies_file(self.cookies) as cf:
-                ydl_opts: dict = {
-                    "writeautomaticsub": True,
-                    "writesubtitles":    True,
-                    "subtitleslangs":    ["en", "en-US", "en-GB"],
-                    "subtitlesformat":   "vtt",
-                    "skip_download":     True,
-                    "outtmpl":           f"{tmpdir}/%(id)s.%(ext)s",
-                    "quiet":             True,
-                    "no_warnings":       True,
-                    "socket_timeout":    30,
-                    "retries":           3,
-                }
-                if cf:
-                    ydl_opts["cookiefile"] = cf
-
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
-
-            vtt_files = list(Path(tmpdir).glob("*.vtt"))
-            if not vtt_files:
-                return None
-
-            return self._parse_vtt(vtt_files[0].read_text(encoding="utf-8", errors="replace"))
-
-    def _parse_vtt(self, vtt_text: str) -> str:
-        """
-        Extract clean text from a WebVTT file.
-
-        YouTube auto-generated VTT has inline timing tags (<00:00:01.320>)
-        and repeated cues. We deduplicate by cue text to get a clean transcript.
-        """
-        blocks = re.split(r"\n{2,}", vtt_text.strip())
-        seen: set[str] = set()
-        texts: list[str] = []
-
-        for block in blocks:
-            lines = block.strip().splitlines()
-            if not lines:
-                continue
-            if lines[0].startswith("WEBVTT") or lines[0].startswith("NOTE"):
-                continue
-
-            for line in lines:
-                if "-->" in line or re.match(r"^\d+$", line.strip()):
-                    continue
-                line = re.sub(r"<\d{2}:\d{2}:\d{2}\.\d{3}>", "", line)
-                line = re.sub(r"<[^>]+>", "", line)
-                line = line.strip()
-                if line and line not in seen:
-                    seen.add(line)
-                    texts.append(line)
-
-        return " ".join(texts)
+        with _cookies_file(self.cookies) as cf:
+            with yt_dlp.YoutubeDL(self._ydl_opts(cf)) as ydl:
+                try:
+                    info = ydl.extract_info(url, download=False)
+                except Exception as exc:
+                    raise ValueError(f"Could not load video: {exc}") from exc
+                if not self.prefer_captions:
+                    return info, None
+                picked = _pick_caption_track(info, self.language)
+                if not picked:
+                    return info, None
+                track, lang, is_auto = picked
+                try:
+                    # ydl.urlopen reuses yt-dlp's headers, cookies and proxy settings.
+                    raw = ydl.urlopen(track["url"]).read()
+                    text = caption_track_to_text(raw, track["ext"])
+                except Exception:
+                    return info, None
+                return info, ((text, lang, is_auto) if text.strip() else None)
 
     def _download_audio(self, url: str) -> tuple[Path, Path]:
         """Download best audio track. Returns (audio_path, tmpdir) — caller cleans up tmpdir."""
@@ -373,8 +385,10 @@ class YouTubeExtractor:
         return tmpdir / f"{video_id}.mp3", tmpdir
 
     def _transcribe(self, audio_path: Path) -> str:
+        from .captions import segments_from_engine, to_paragraphs
+
         if self.engine is None:
             from transcriber import get_engine
             self.engine = get_engine()
-        result = self.engine.transcribe(str(audio_path))
-        return result.get("text", "") if isinstance(result, dict) else result
+        # Engines take only the path; their language comes from settings.
+        return to_paragraphs(segments_from_engine(self.engine.transcribe(str(audio_path))))
