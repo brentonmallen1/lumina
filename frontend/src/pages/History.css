@@ -449,3 +449,9 @@
     width: 100%;
   }
 }
+
+/* Recipe entries: format switch + Send to Mealie above the recipe */
+.history-recipe-actions {
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}

@@ -5,8 +5,10 @@ import ReactMarkdown from 'react-markdown';
 import * as api from '../api/client';
 import type { HistoryEntry } from '../types';
 import ResultView from '../components/results/ResultView';
+import RecipeTools, { type RecipeFormat } from '../components/results/RecipeTools';
 import '../components/results/renderers';
 import { BUILTIN_OUTPUT_TYPES } from '../components/results/registry';
+import './Summarize.css'; // shared result action buttons
 import './History.css';
 
 const MODE_LABELS: Record<string, string> = {
@@ -32,6 +34,35 @@ const SOURCE_LABELS: Record<string, string> = {
   image:   'Image',
 };
 
+/** A saved recipe with a Markdown / JSON-LD switch and Send to Mealie. */
+function HistoryRecipe({ entry, mealieReady }: { entry: HistoryEntry; mealieReady: boolean }) {
+  const initial: RecipeFormat = entry.mode === 'recipe_jsonld' ? 'jsonld' : 'markdown';
+  const [format, setFormat] = useState<RecipeFormat>(initial);
+  const [texts, setTexts] = useState<Partial<Record<RecipeFormat, string>>>({ [initial]: entry.result });
+  const text = texts[format] ?? entry.result;
+  const sourceUrl = /^https?:\/\//.test(entry.source_detail) ? entry.source_detail : undefined;
+
+  return (
+    <>
+      <div className="summarize-result-actions history-recipe-actions">
+        <RecipeTools
+          format={format}
+          text={text}
+          cached={texts}
+          onConvert={(f, t) => { setTexts(prev => ({ ...prev, [f]: t })); setFormat(f); }}
+          sourceUrl={sourceUrl}
+          mealieReady={mealieReady}
+        />
+      </div>
+      {format === 'jsonld' ? (
+        <ResultView text={text} outputType="json:recipe" rendered />
+      ) : (
+        <div className="history-result-text"><ReactMarkdown>{text}</ReactMarkdown></div>
+      )}
+    </>
+  );
+}
+
 function formatDate(iso: string): string {
   const d = new Date(iso + 'Z'); // treat as UTC
   return d.toLocaleString(undefined, {
@@ -48,6 +79,7 @@ type SearchResult = HistoryEntry & { snippet?: string };
 
 export default function History() {
   const [entries,      setEntries]      = useState<HistoryEntry[]>([]);
+  const [mealieReady,  setMealieReady]  = useState(false);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState('');
   const [expandedId,   setExpandedId]   = useState<string | null>(null);
@@ -69,6 +101,11 @@ export default function History() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Recipe entries offer "Send to Mealie" once it's set up in Settings → Integrations.
+  useEffect(() => {
+    api.getSettings().then(st => setMealieReady(Boolean(st.mealie_url && st.mealie_api_token))).catch(() => {});
+  }, []);
 
   // Debounced search
   useEffect(() => {
@@ -174,7 +211,9 @@ export default function History() {
 
         {isOpen && (
           <div className="history-item-body">
-            {BUILTIN_OUTPUT_TYPES[entry.mode] ? (
+            {entry.mode === 'recipe' || entry.mode === 'recipe_jsonld' ? (
+              <HistoryRecipe entry={entry} mealieReady={mealieReady} />
+            ) : BUILTIN_OUTPUT_TYPES[entry.mode] ? (
               <ResultView
                 text={entry.result}
                 outputType={BUILTIN_OUTPUT_TYPES[entry.mode]}

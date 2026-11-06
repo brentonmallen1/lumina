@@ -171,3 +171,63 @@ def test_fetch_linked_recipe_reports_blocked(monkeypatch):
     monkeypatch.setattr(linked.httpx, "AsyncClient", factory)
     out = asyncio.run(linked.fetch_linked_recipe(["https://example.com/recipe"]))
     assert out.recipe is None and out.error == "doesn't allow automated requests"
+
+
+# ── Markdown ⇄ JSON-LD ───────────────────────────────────────────────────────
+
+def test_round_trip_json_markdown_json():
+    from recipes.markdown import from_markdown, to_markdown
+    src = normalize_recipe({**USER_RECIPE, "description": "Easy pasta.", "url": "https://example.com/r"})
+    md = to_markdown(src)
+    assert "**Prep time:** 10 minutes" in md and "## Ingredients" in md and "1. Heat a large pan." in md
+    back = from_markdown(md)
+    for key in ("name", "description", "recipeIngredient", "recipeInstructions", "prepTime",
+                "cookTime", "totalTime", "recipeYield", "url"):
+        assert back[key] == src[key], key
+
+
+def test_from_markdown_handles_model_variations():
+    from recipes.markdown import from_markdown
+    md = """# Weeknight Curry
+
+A quick, mild curry.
+
+**Prep time:** 10 minutes
+**Cook time:** 1 hour 5 min
+**Servings:** 4
+
+## Ingredients
+
+### For the sauce
+* 2 tbsp **oil**
+* 1 onion, diced
+
+## Instructions
+
+1. Heat the oil.
+2. Add the onion and cook
+   until soft.
+- Serve.
+
+## Notes
+
+- Freezes well.
+"""
+    r = from_markdown(md)
+    assert r["name"] == "Weeknight Curry" and r["description"] == "A quick, mild curry."
+    assert r["prepTime"] == "PT10M" and r["cookTime"] == "PT1H5M" and r["recipeYield"] == "4"
+    assert r["recipeIngredient"] == ["2 tbsp oil", "1 onion, diced"]
+    assert [s["text"] for s in r["recipeInstructions"]] == [
+        "Heat the oil.", "Add the onion and cook until soft.", "Serve."]
+
+
+def test_from_markdown_rejects_non_recipes():
+    from recipes.markdown import from_markdown
+    assert from_markdown("# Summary\n\nJust prose, no recipe.") is None
+    assert from_markdown("No recipe detected in this content.") is None
+
+
+def test_youtube_url_gives_thumbnail_image():
+    r = normalize_recipe({**USER_RECIPE}, {"url": "https://youtu.be/uCQvpRnqYxM"})
+    assert r["image"] == "https://i.ytimg.com/vi/uCQvpRnqYxM/hqdefault.jpg"
+    assert "image" not in normalize_recipe({**USER_RECIPE}, {"url": "https://example.com/r"})

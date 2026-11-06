@@ -53,7 +53,9 @@ From the video alone, the model is told to keep quantities and preparation notes
 
 **JSON-LD output** is always normalized to valid schema.org/Recipe before you see it. That means `HowToStep` steps, ISO 8601 times, the source URL, the video thumbnail as the image, and the channel as the author. It imports cleanly with Mealie's parser (verified with Mealie v3.30).
 
-**Send to Mealie**: add your Mealie URL and API token in **Settings → Integrations**. Recipe results then get a **Send to Mealie** button that creates the recipe through Mealie's API (photo included) and links you to it.
+**Markdown ⇄ JSON-LD**: every recipe result, and every saved recipe in **History**, has a Markdown / JSON-LD switch. JSON-LD → Markdown happens instantly in code. Markdown → JSON-LD is also parsed in code for Lumina's own recipe layout; only Markdown in some other shape, such as from a custom prompt, goes to the LLM.
+
+**Send to Mealie**: add your Mealie URL and API token in **Settings → Integrations**. Recipe results, in either format, get a **Send to Mealie** button that creates the recipe through Mealie's API and links you to it. The photo is included, using the video thumbnail for YouTube recipes. It's also on saved recipes in **History**, so a recipe that finished while you were elsewhere is one click away.
 
 ## Chat
 

@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   ArrowLeft, Sparkles, Copy, Download, RotateCcw, Square,
   Mic, Youtube, Globe, FileText, File as FileIcon, Image as ImageIcon,
-  AlertTriangle, X, Code, Volume2, Loader, FileJson, ChefHat, ExternalLink,
+  AlertTriangle, X, Code, Volume2, Loader, FileJson,
 } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import * as api from '../api/client';
@@ -14,6 +14,7 @@ import DropZone from '../components/summarize/DropZone';
 import ChatPanel from '../components/summarize/ChatPanel';
 import TranslatePanel from '../components/summarize/TranslatePanel';
 import ResultView from '../components/results/ResultView';
+import RecipeTools, { type RecipeFormat } from '../components/results/RecipeTools';
 import '../components/results/renderers';
 import {
   BUILTIN_OUTPUT_TYPES, outputBehavior, parseJson, type DownloadFormat,
@@ -159,15 +160,9 @@ export default function Summarize() {
 
   // Recipe
   const [recipeFormat, setRecipeFormat]   = useState<'markdown' | 'jsonld'>('jsonld');
-  const [jsonLdLoading, setJsonLdLoading] = useState(false);
-  const [jsonLdError, setJsonLdError]     = useState('');
-  const [jsonLdCopied, setJsonLdCopied]   = useState(false);
 
   // Mealie (Settings → Integrations)
   const [mealieReady, setMealieReady]     = useState(false);
-  const [mealieSending, setMealieSending] = useState(false);
-  const [mealieLink, setMealieLink]       = useState('');
-  const [mealieError, setMealieError]     = useState('');
 
   const behavior = outputBehavior(outputType);
   const isRunning = ['extracting', 'transcribing', 'thinking', 'streaming'].includes(view);
@@ -217,9 +212,6 @@ export default function Summarize() {
     setErrorMsg('');
     setWarnings([]);
     setStatusDetail('');
-    setJsonLdError('');
-    setMealieLink('');
-    setMealieError('');
   };
 
   const addWarning = (msg: string) => setWarnings(prev => (prev.includes(msg) ? prev : [...prev, msg]));
@@ -491,8 +483,6 @@ export default function Summarize() {
   const handleModeClick = (newMode: string) => {
     if (isRunning) return;
     setMode(newMode);
-    setMealieLink('');
-    setMealieError('');
     const cached = modeCache[newMode]
       ?? (newMode === 'recipe' ? modeCache.recipe_jsonld : undefined);
     if (cached) {
@@ -559,48 +549,15 @@ export default function Summarize() {
     ?? (sourceTab === 'youtube' ? youtubeUrl.trim() || undefined
       : sourceTab === 'url' ? urlInput.trim() || undefined : undefined);
 
-  /** JSON-LD for the recipe on screen: the result itself, or the exported JSON-LD of a Markdown recipe. */
-  const recipeJsonLd = resultMode === 'recipe_jsonld' ? result
-    : resultMode === 'recipe' ? modeCache.recipe_jsonld?.result ?? '' : '';
-
-  const sendToMealie = async () => {
-    if (!recipeJsonLd) return;
-    setMealieSending(true);
-    setMealieError('');
-    setMealieLink('');
-    try {
-      const { url } = await api.sendRecipeToMealie(parseJson(recipeJsonLd) ?? recipeJsonLd, resultSourceUrl);
-      setMealieLink(url);
-    } catch (err) {
-      setMealieError(err instanceof Error ? err.message : 'Sending to Mealie failed');
-    } finally {
-      setMealieSending(false);
-    }
-  };
-
-  const generateJsonLD = async () => {
-    if (!result || resultMode !== 'recipe') return;
-    setJsonLdLoading(true);
-    setJsonLdError('');
-    try {
-      const data = await api.convertRecipeToJsonLD(result, resultSourceUrl);
-      setModeCache(prev => ({
-        ...prev,
-        recipe_jsonld: { result: JSON.stringify(data, null, 2), reasoning: '', outputType: 'json:recipe' },
-      }));
-    } catch (err) {
-      setJsonLdError(err instanceof Error ? err.message : 'Failed to generate JSON-LD');
-    } finally {
-      setJsonLdLoading(false);
-    }
-  };
-
-  const copyJsonLD = async () => {
-    const json = modeCache.recipe_jsonld?.result;
-    if (json && await copyText(json)) {
-      setJsonLdCopied(true);
-      setTimeout(() => setJsonLdCopied(false), 2000);
-    }
+  /** Show a recipe in the other format (from RecipeTools) and remember both. */
+  const showRecipeFormat = (format: RecipeFormat, text: string) => {
+    const m = format === 'jsonld' ? 'recipe_jsonld' : 'recipe';
+    const type = format === 'jsonld' ? 'json:recipe' : 'markdown';
+    setModeCache(prev => ({ ...prev, [m]: { result: text, reasoning: prev[m]?.reasoning ?? '', outputType: type } }));
+    resultBuf.set(text);
+    setResultMode(m);
+    setOutputType(type);
+    setRendered(true);
   };
 
   const handleReadAloud = async (text: string) => {
@@ -900,58 +857,17 @@ export default function Summarize() {
                         .{f}
                       </button>
                     ))}
-                  {resultMode === 'recipe' && (
-                    modeCache.recipe_jsonld ? (
-                      <>
-                        <button
-                          className={`summarize-action-btn${jsonLdCopied ? ' copied' : ''}`}
-                          onClick={copyJsonLD}
-                          title="Copy JSON-LD"
-                        >
-                          <FileJson size={14} aria-hidden="true" />
-                          {jsonLdCopied ? 'Copied!' : 'Copy JSON-LD'}
-                        </button>
-                        <button
-                          className="summarize-action-btn"
-                          onClick={() => downloadBlob(modeCache.recipe_jsonld!.result, 'recipe.json', 'application/ld+json')}
-                        >
-                          <Download size={14} aria-hidden="true" />
-                          .json
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        className="summarize-action-btn"
-                        onClick={generateJsonLD}
-                        disabled={jsonLdLoading}
-                        title="Generate JSON-LD for Mealie"
-                      >
-                        <FileJson size={14} aria-hidden="true" />
-                        {jsonLdLoading ? 'Generating…' : 'Export JSON-LD'}
-                      </button>
-                    )
+                  {(resultMode === 'recipe' || resultMode === 'recipe_jsonld') && (
+                    <RecipeTools
+                      key={`${resultMode}:${result.slice(0, 80)}`}
+                      format={resultMode === 'recipe_jsonld' ? 'jsonld' : 'markdown'}
+                      text={result}
+                      cached={{ markdown: modeCache.recipe?.result, jsonld: modeCache.recipe_jsonld?.result }}
+                      onConvert={showRecipeFormat}
+                      sourceUrl={resultSourceUrl}
+                      mealieReady={mealieReady}
+                    />
                   )}
-                  {jsonLdError && <span className="summarize-jsonld-error" role="alert">{jsonLdError}</span>}
-                  {mealieReady && recipeJsonLd && (
-                    mealieLink ? (
-                      <a className="summarize-action-btn" href={mealieLink} target="_blank" rel="noreferrer">
-                        <ExternalLink size={14} aria-hidden="true" />
-                        Open in Mealie
-                      </a>
-                    ) : (
-                      <button
-                        className="summarize-action-btn"
-                        onClick={sendToMealie}
-                        disabled={mealieSending}
-                        title="Create this recipe in Mealie"
-                      >
-                        {mealieSending
-                          ? <><Loader size={13} className="summarize-tts-spin" aria-hidden="true" /> Sending…</>
-                          : <><ChefHat size={14} aria-hidden="true" /> Send to Mealie</>}
-                      </button>
-                    )
-                  )}
-                  {mealieError && <span className="summarize-jsonld-error" role="alert">{mealieError}</span>}
                   <button className="summarize-action-btn summarize-action-btn--ghost" onClick={reset}>
                     <RotateCcw size={14} aria-hidden="true" />
                     New

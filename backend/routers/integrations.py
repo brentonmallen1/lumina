@@ -43,15 +43,29 @@ async def mealie_test(req: MealieTestRequest):
 
 
 class MealieRecipeRequest(BaseModel):
-    recipe: dict | str              # schema.org Recipe (object or JSON text)
-    source_url: str | None = None   # where the recipe came from (YouTube/page URL)
-    image: str | None = None        # fallback image URL (e.g. video thumbnail)
+    recipe: dict | str | None = None   # schema.org Recipe (object or JSON text)
+    markdown: str | None = None        # …or a Markdown recipe, converted first
+    source_url: str | None = None      # where the recipe came from (YouTube/page URL)
+    image: str | None = None           # fallback image URL (e.g. video thumbnail)
 
 
 @router.post("/mealie/recipes")
 async def mealie_create_recipe(req: MealieRecipeRequest):
     url, token = _mealie_config()
+    if req.recipe is None and req.markdown:
+        from llm.runner import LLMConfigError
+        from recipes.convert import ConversionError, markdown_to_recipe
+        try:
+            recipe, _method = await markdown_to_recipe(req.markdown, req.source_url, req.image)
+        except (ConversionError, LLMConfigError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        try:
+            return await mealie.create_recipe(url, token, recipe, source_url=recipe.get("url"))
+        except mealie.MealieError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
     data = req.recipe
+    if data is None:
+        raise HTTPException(status_code=422, detail="Send a recipe (JSON-LD) or markdown.")
     if isinstance(data, str):
         from llm.runner import parse_json_result
         data = parse_json_result(data)

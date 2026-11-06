@@ -434,30 +434,35 @@ class RecipeJsonLDRequest(BaseModel):
 
 @router.post("/recipe/jsonld")
 async def convert_recipe_to_jsonld(req: RecipeJsonLDRequest):
-    """Convert recipe markdown to validated schema.org/Recipe JSON-LD."""
-    from llm.prompts import render_template
+    """Recipe Markdown → normalized schema.org/Recipe JSON-LD.
+
+    Lumina's own Recipe Markdown is parsed in code; other Markdown falls back
+    to the LLM. The ``X-Converted-By`` header says which (code | llm).
+    """
+    from fastapi.responses import JSONResponse
+    from recipes.convert import ConversionError, markdown_to_recipe
 
     try:
-        rt = await resolve_runtime()
+        recipe, method = await markdown_to_recipe(req.recipe_markdown, req.source_url, req.image)
     except LLMConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except ConversionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return JSONResponse(recipe, headers={"X-Converted-By": method})
 
-    raw = ""
-    async for ev in stream_pass(
-        rt, system=RECIPE_JSONLD_PROMPT["system"],
-        prompt=render_template(RECIPE_JSONLD_PROMPT["template"], req.recipe_markdown),
-        temperature=0.1, think=rt.think_param(False), format=RECIPE_JSONLD_SCHEMA,
-        forward_text=False, forward_thinking=False,
-    ):
-        if ev["type"] == "pass_done":
-            raw = ev["text"]
 
-    from recipes.jsonld import is_empty_recipe, normalize_recipe
+class RecipeMarkdownRequest(BaseModel):
+    recipe: dict | str
 
-    data = parse_json_result(raw)
+
+@router.post("/recipe/markdown")
+async def convert_recipe_to_markdown(req: RecipeMarkdownRequest):
+    """schema.org/Recipe JSON-LD → Markdown (in code, instant)."""
+    from recipes.markdown import to_markdown
+
+    data = req.recipe
+    if isinstance(data, str):
+        data = parse_json_result(data)
     if not isinstance(data, dict):
-        raise HTTPException(status_code=422, detail="LLM did not return valid JSON")
-    recipe = normalize_recipe(data, {"url": req.source_url, "thumbnail": req.image})
-    if is_empty_recipe(recipe):
-        raise HTTPException(status_code=422, detail="No ingredients or steps were found in this recipe.")
-    return recipe
+        raise HTTPException(status_code=422, detail="That isn't valid recipe JSON.")
+    return {"markdown": to_markdown(data)}

@@ -145,6 +145,12 @@ def normalize_recipe(data: dict, source_meta: dict | None = None) -> dict:
     url = data.get("url") or meta.get("url")
     if isinstance(url, str) and url.startswith(("http://", "https://")):
         recipe["url"] = url
+        if "image" not in recipe:
+            # Every YouTube video has a thumbnail at a predictable address.
+            from jobs.cache import extract_youtube_video_id
+            vid = extract_youtube_video_id(url)
+            if vid:
+                recipe["image"] = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
 
     author = data.get("author") or meta.get("uploader")
     if isinstance(author, str) and author.strip():

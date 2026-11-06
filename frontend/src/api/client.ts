@@ -133,14 +133,26 @@ export function testMealie(url?: string, token?: string): Promise<{ ok: boolean;
   });
 }
 
-/** Create a recipe in Mealie from schema.org JSON-LD. Returns the new recipe's link. */
+/**
+ * Create a recipe in Mealie from schema.org JSON-LD, or from a Markdown
+ * recipe (converted on the server first). Returns the new recipe's link.
+ */
 export function sendRecipeToMealie(
-  recipe: unknown, sourceUrl?: string,
+  input: { recipe: unknown } | { markdown: string }, sourceUrl?: string,
 ): Promise<{ slug: string; url: string }> {
   return request('/api/integrations/mealie/recipes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ recipe, source_url: sourceUrl }),
+    body: JSON.stringify({ ...input, source_url: sourceUrl }),
+  });
+}
+
+/** schema.org Recipe JSON-LD → Markdown (done in code on the server). */
+export function recipeToMarkdown(recipe: unknown): Promise<{ markdown: string }> {
+  return request('/api/recipe/markdown', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipe }),
   });
 }
 

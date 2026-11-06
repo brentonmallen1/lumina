@@ -242,3 +242,17 @@ a.mtg-card-name:hover { color: var(--accent); text-decoration: underline; }
 .mtg-swap-in { color: var(--text); font-weight: 600; }
 
 .mtg-mentions { margin: 0; font-size: 0.84rem; color: var(--text-muted); line-height: 1.5; }
+
+/* ── Recipe format switch (Markdown | JSON-LD) ───────────────────────── */
+.recipe-format-switch {
+  display: inline-flex;
+}
+.recipe-format-switch .summarize-action-btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.recipe-format-switch .summarize-action-btn:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-left: -1px;
+}
