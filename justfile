@@ -174,22 +174,33 @@ _playwright-version:
 build-playwright-base:
     #!/usr/bin/env bash
     set -euo pipefail
-    registry="${DOCKER_REGISTRY:-}"
-    if [[ -z "$registry" ]]; then
-        echo "Error: DOCKER_REGISTRY not set in .env"
-        exit 1
-    fi
     version=$(just _playwright-version)
-    echo "Building playwright base (playwright==${version})..."
-    docker buildx build \
-        --platform linux/amd64 \
-        --file backend/Dockerfile.playwright-base \
-        --build-arg PLAYWRIGHT_VERSION="${version}" \
-        --provenance=false \
-        --tag "${registry}:playwright-base" \
-        --push \
-        .
-    echo "✓ Pushed ${registry}:playwright-base"
+    registry="${DOCKER_REGISTRY:-}"
+    if [[ -n "$registry" ]]; then
+        echo "Building playwright base (playwright==${version}) and pushing to ${registry}..."
+        docker buildx build \
+            --platform linux/amd64 \
+            --file backend/Dockerfile.playwright-base \
+            --build-arg PLAYWRIGHT_VERSION="${version}" \
+            --provenance=false \
+            --tag "${registry}:playwright-base" \
+            --push \
+            .
+        echo "✓ Pushed ${registry}:playwright-base"
+    else
+        # No registry: build into the local Docker image store as lumina:playwright-base,
+        # which docker-compose.yml uses when DOCKER_REGISTRY is unset.
+        echo "Building playwright base (playwright==${version}) locally as lumina:playwright-base..."
+        docker buildx build \
+            --platform linux/amd64 \
+            --file backend/Dockerfile.playwright-base \
+            --build-arg PLAYWRIGHT_VERSION="${version}" \
+            --provenance=false \
+            --tag "lumina:playwright-base" \
+            --load \
+            .
+        echo "✓ Built lumina:playwright-base"
+    fi
 
 # ── Docker: Run ───────────────────────────────────────────────────────────────
 

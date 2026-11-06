@@ -4,7 +4,9 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       args:
-        PLAYWRIGHT_BASE_IMAGE: "${DOCKER_REGISTRY}:playwright-base"
+        # Built by `just build-playwright-base` (local lumina:playwright-base when
+        # DOCKER_REGISTRY is unset, or pulled from your registry).
+        PLAYWRIGHT_BASE_IMAGE: "${DOCKER_REGISTRY:-lumina}:playwright-base"
     # Everything in .env (OLLAMA_*, AUTH_*, TTS_*, …) reaches the container;
     # the environment block below only pins container paths and defaults.
     env_file:

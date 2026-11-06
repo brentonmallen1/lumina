@@ -2164,7 +2164,7 @@ async def spa_fallback(full_path: str, _: bool = Depends(verify_auth)):
     if full_path:
         candidate = (_STATIC_DIR / full_path).resolve()
         try:
-            if str(candidate).startswith(str(_STATIC_DIR.resolve())) and candidate.is_file():
+            if candidate.is_relative_to(_STATIC_DIR.resolve()) and candidate.is_file():
                 return FileResponse(candidate)
         except (OSError, ValueError):
             pass

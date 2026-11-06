@@ -145,7 +145,8 @@ async def mtg_precon_pipeline(ctx: ModeContext) -> AsyncIterator[dict]:
 
     def fix(n: str, pool: list[str], loose: bool = False) -> str:
         hit = match_known(n, pool) or (match_known(n, pool, cutoff=0.5, margin=0.08) if loose else None)
-        if hit and name_key(hit) != name_key(n):
+        # Record real corrections only — not a dropped leading "The".
+        if hit and name_key(hit).removeprefix("the") != name_key(n).removeprefix("the"):
             corrected[hit] = n
         return hit or n
 
