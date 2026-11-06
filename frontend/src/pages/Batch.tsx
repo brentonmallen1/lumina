@@ -88,6 +88,7 @@ export default function Batch() {
   const [dragging,     setDragging]     = useState(false);
 
   const processingRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const inputRef      = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -108,6 +109,12 @@ export default function Batch() {
   const appendResult = useCallback((id: string, chunk: string) => {
     setItems(prev => prev.map(item =>
       item.id === id ? { ...item, result: item.result + chunk } : item
+    ));
+  }, []);
+
+  const appendReasoning = useCallback((id: string, chunk: string) => {
+    setItems(prev => prev.map(item =>
+      item.id === id ? { ...item, reasoning: item.reasoning + chunk } : item
     ));
   }, []);
 
@@ -163,35 +170,45 @@ export default function Batch() {
 
       updateItem(item.id, { status: 'thinking', statusDetail: '', result: '', error: '' });
 
-      const onPhase = (phase: string, detail: string) =>
-        updateItem(item.id, { status: phase as BatchStatus, statusDetail: detail });
+      const controller = new AbortController();
+      abortRef.current = controller;
+      let finalText = '';
+      let finalReasoning = '';
 
-      const onChunk = (chunk: string) => appendResult(item.id, chunk);
-
-      const onError = (msg: string) =>
-        updateItem(item.id, { status: 'error', error: msg });
-
-      const onDone = () => {
-        setItems(prev => {
-          const found = prev.find(i => i.id === item.id);
-          if (found?.result) {
+      const handlers: api.StreamHandlers = {
+        onPhase: (phase, detail) =>
+          updateItem(item.id, { status: phase as BatchStatus, statusDetail: detail }),
+        onReasoning: chunk => { finalReasoning += chunk; appendReasoning(item.id, chunk); },
+        onChunk: chunk => {
+          finalText += chunk;
+          appendResult(item.id, chunk);
+          updateItem(item.id, { status: 'streaming' });
+        },
+        onReset: () => { finalText = ''; updateItem(item.id, { result: '' }); },
+        onResult: text => { finalText = text; updateItem(item.id, { result: text }); },
+        onError: msg => updateItem(item.id, { status: 'error', error: msg }),
+        onDone: () => {
+          updateItem(item.id, { status: 'done' });
+          if (finalText) {
             api.saveHistory({
-              mode,
-              source: item.source,
-              result: found.result,
-              reasoning: found.reasoning,
+              mode, source: item.source, source_detail: item.file.name,
+              result: finalText, reasoning: finalReasoning,
             }).catch(() => {});
           }
-          return prev.map(i => i.id === item.id ? { ...i, status: 'done' } : i);
-        });
+        },
       };
 
+      const opts = { signal: controller.signal };
       if (item.source === 'audio') {
-        await api.summarizeFile(item.file, 'audio', mode, onPhase, onChunk, onError, onDone);
+        await api.summarizeFile(item.file, 'audio', mode, handlers, opts);
       } else if (item.source === 'pdf') {
-        await api.summarizeFile(item.file, 'pdf', mode, onPhase, onChunk, onError, onDone);
+        await api.summarizeFile(item.file, 'pdf', mode, handlers, opts);
       } else if (item.source === 'image') {
-        await api.summarizeImage(item.file, mode, onChunk, onError, onDone);
+        await api.summarizeImage(item.file, mode, handlers, opts);
+      }
+      if (controller.signal.aborted) {
+        updateItem(item.id, { status: 'pending', statusDetail: '' });
+        break;
       }
     }
 
@@ -201,7 +218,7 @@ export default function Batch() {
 
   const stopBatch = () => {
     processingRef.current = false;
-    // The current in-flight item will complete; subsequent ones won't start
+    abortRef.current?.abort();
   };
 
   // ── Derived state ──────────────────────────────────────────────────────────

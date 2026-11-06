@@ -213,7 +213,10 @@ class JobWorker:
             raise
 
         except Exception as e:
-            error_msg = str(e)
+            if type(e).__name__ == "JobCancelled":
+                logger.info(f"Job cancelled by user: {job_id}")
+                return
+            error_msg = str(e) or repr(e)
             logger.error(f"Job {job_id} failed: {error_msg}\n{traceback.format_exc()}")
             db.fail_job(job_id, error_msg)
 

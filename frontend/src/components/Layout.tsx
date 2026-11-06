@@ -8,7 +8,7 @@ import * as api from '../api/client';
 import './Layout.css';
 
 function formatContextSize(size: number): string {
-  if (size >= 1000) return `${Math.round(size / 1000)}k`;
+  if (size >= 1024) return `${Math.round(size / 1024)}K`;
   return String(size);
 }
 
@@ -54,29 +54,21 @@ export default function Layout() {
   }, [location.pathname]);
 
   useEffect(() => {
-    api.getSettings().then(s => {
-      if (s.ollama_model) {
-        setModel(s.ollama_model);
-        fetchContextSize(s.ollama_context_size);
-      }
-    }).catch(() => {});
-
-    const handleSettingsChanged = (e: Event) => {
-      const settings = (e as CustomEvent).detail;
-      if (settings?.ollama_model) {
-        setModel(settings.ollama_model);
-        fetchContextSize(settings.ollama_context_size);
-      }
+    // Show the context window Lumina will actually request for the active model.
+    const showModel = (name?: string) => {
+      if (!name) return;
+      setModel(name);
+      setContextSize(null);
+      api.getOllamaModelInfo(name)
+        .then(info => setContextSize(info.effective_context))
+        .catch(() => {});
     };
+    api.getSettings().then(s => showModel(s.ollama_model)).catch(() => {});
+
+    const handleSettingsChanged = (e: Event) => showModel((e as CustomEvent).detail?.ollama_model);
     window.addEventListener('settings-changed', handleSettingsChanged);
     return () => window.removeEventListener('settings-changed', handleSettingsChanged);
   }, []);
-
-  const fetchContextSize = (configuredSize?: string) => {
-    if (configuredSize) {
-      setContextSize(parseInt(configuredSize, 10));
-    }
-  };
 
   return (
     <div className="layout">

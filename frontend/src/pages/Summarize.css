@@ -1146,3 +1146,37 @@ details[open] .summarize-reasoning-summary::before {
   font-size: 0.75rem;
   margin-left: 4px;
 }
+
+/* ── Stop button (replaces Run while processing) ─────────────────────── */
+.summarize-submit-btn--stop {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.summarize-submit-btn--stop:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+}
+
+/* ── Raw JSON output ──────────────────────────────────────────────────── */
+.summarize-output--json {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+
+/* ── Markdown inside chat replies and translations ───────────────────── */
+.summarize-chat-msg-content .markdown,
+.summarize-translate-result .markdown {
+  white-space: normal;
+}
+.summarize-chat-msg-content .markdown > :first-child,
+.summarize-translate-result .markdown > :first-child { margin-top: 0; }
+.summarize-chat-msg-content .markdown > :last-child,
+.summarize-translate-result .markdown > :last-child { margin-bottom: 0; }
+.summarize-chat-msg-content .markdown ul,
+.summarize-chat-msg-content .markdown ol,
+.summarize-translate-result .markdown ul,
+.summarize-translate-result .markdown ol { padding-left: 1.2em; }

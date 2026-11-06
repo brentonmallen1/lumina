@@ -1,4 +1,4 @@
-import type { AppInfo, AudioModelMap, Capabilities, ChatMessage, EnhancementOptions, Feed, FeedEntry, FileMeta, HistoryEntry, Job, OllamaModel, PipelineSession, Prompt, Settings, SettingsUpdateResponse, TTSStatus, TTSVoiceMap, YouTubeDownloadJob, YouTubeVideoInfo } from '../types';
+import type { AppInfo, AudioModelMap, Capabilities, ChatMessage, EnhancementOptions, Feed, FeedEntry, FileMeta, HistoryEntry, Job, OllamaModel, OllamaModelInfo, PipelineSession, Prompt, Settings, SettingsUpdateResponse, TTSStatus, TTSVoiceMap, YouTubeDownloadJob, YouTubeVideoInfo } from '../types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
@@ -158,7 +158,7 @@ export function getOllamaModels(): Promise<{ models: OllamaModel[] }> {
   return request('/api/ollama/models');
 }
 
-export function getOllamaModelInfo(name: string): Promise<{ context_length: number | null; parameter_size: string | null }> {
+export function getOllamaModelInfo(name: string): Promise<OllamaModelInfo> {
   return request(`/api/ollama/model/${encodeURIComponent(name)}`);
 }
 
@@ -269,44 +269,17 @@ export function getClipDownloadUrl(jobId: string, clipId: string): string {
 
 // ── Translation ────────────────────────────────────────────────────────────
 
-export async function translateStream(
+export function translateStream(
   text: string,
   targetLanguage: string,
-  onChunk: (text: string) => void,
-  onDone: () => void,
-  onError: (msg: string) => void,
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch('/api/translate', {
+  return streamSSE('/api/translate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text, target_language: targetLanguage }),
-  });
-  if (!res.ok || !res.body) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    onError(body.detail ?? res.statusText);
-    return;
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const payload = line.slice(6).trim();
-      if (payload === '[DONE]') { onDone(); return; }
-      try {
-        const ev = JSON.parse(payload);
-        if (ev.text) onChunk(ev.text);
-        else if (ev.error) { onError(ev.error); return; }
-      } catch { /* ignore malformed */ }
-    }
-  }
-  onDone();
+  }, handlers, signal);
 }
 
 // ── History ────────────────────────────────────────────────────────────────
@@ -550,267 +523,171 @@ export async function synthesizeSpeech(text: string, voice?: string): Promise<Bl
   return res.blob();
 }
 
-// ── Shared SSE consumer ────────────────────────────────────────────────────
+// ── Shared SSE streaming ───────────────────────────────────────────────────
 
 /**
- * Read a streaming SSE response and dispatch events to the provided handlers.
- *
- * Event shapes emitted by the backend:
- *   {"phase": "extracting"|"transcribing", "detail": "..."}  — extraction progress
- *   {"extracted_content": "...", "content_truncated": bool}   — source text after extraction (truncated if >32KB)
- *   {"warning": "...message..."}                              — non-fatal warning
- *   {"text": "...chunk..."}                                    — LLM output chunk
- *   {"error": "...message..."}                                — terminal error
- *   [DONE]                                                    — end of stream
+ * Handlers for the backend's SSE protocol (see backend/routers/llm.py):
+ *   {"phase", "detail"}       progress (extracting | transcribing | thinking)
+ *   {"reasoning"}             model reasoning chunk (native Ollama thinking)
+ *   {"text"}                  answer chunk
+ *   {"reset": true}           discard streamed text (structured-output retry)
+ *   {"warning"} / {"notice"}  non-fatal messages
+ *   {"extracted_content"}     full source text, for chat
+ *   {"result", "meta"}        authoritative final result
+ *   {"error"}                 terminal error
+ *   [DONE]
  */
-async function consumeSSE(
-  res: Response,
-  onPhase: (phase: string, detail: string) => void,
-  onChunk: (text: string) => void,
-  onError: (message: string) => void,
-  onDone: () => void,
-  onExtracted?: (content: string, truncated: boolean) => void,
-  onWarning?: (message: string) => void,
+export interface StreamHandlers {
+  onError: (message: string) => void;
+  onDone: () => void;
+  onPhase?: (phase: string, detail: string) => void;
+  onChunk?: (text: string) => void;
+  onReasoning?: (text: string) => void;
+  onReset?: () => void;
+  onResult?: (text: string, meta: StreamResultMeta) => void;
+  onExtracted?: (content: string) => void;
+  onWarning?: (message: string) => void;
+  onNotice?: (message: string) => void;
+}
+
+export interface StreamResultMeta {
+  mode?: string;
+  model?: string;
+  num_ctx?: number;
+  output_type?: string;
+  longform?: boolean;
+  parts?: number;
+}
+
+function isAbort(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError';
+}
+
+/**
+ * POST to an SSE endpoint and dispatch events. Never throws: network errors,
+ * HTTP errors and dropped connections all go to onError. An aborted request
+ * (user pressed Stop / navigated away) ends silently.
+ */
+async function streamSSE(
+  url: string,
+  init: RequestInit,
+  h: StreamHandlers,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const reader  = res.body!.getReader();
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, signal });
+  } catch (err) {
+    if (!isAbort(err)) h.onError('Network error — is the API server running?');
+    return;
+  }
+  if (!res.ok || !res.body) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    h.onError(typeof body.detail === 'string' ? body.detail : res.statusText);
+    return;
+  }
+
+  const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
-
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-
       buf += decoder.decode(value, { stream: true });
       const lines = buf.split('\n');
       buf = lines.pop() ?? '';
-
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
-        const payload = line.slice(6);
-        if (payload === '[DONE]') { onDone(); return; }
-        try {
-          const ev = JSON.parse(payload);
-          if (ev.error)             { onError(ev.error); return; }
-          if (ev.phase)             { onPhase(ev.phase, ev.detail ?? ''); continue; }
-          if (ev.extracted_content) { onExtracted?.(ev.extracted_content, ev.content_truncated ?? false); continue; }
-          if (ev.warning)           { onWarning?.(ev.warning); continue; }
-          if (ev.text)              { onChunk(ev.text); }
-        } catch { /* partial / malformed line — skip */ }
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') { h.onDone(); return; }
+        let ev: Record<string, unknown>;
+        try { ev = JSON.parse(payload); } catch { continue; }
+        if (typeof ev.error === 'string') { h.onError(ev.error); return; }
+        if (typeof ev.phase === 'string') { h.onPhase?.(ev.phase, (ev.detail as string) ?? ''); continue; }
+        if (typeof ev.extracted_content === 'string') { h.onExtracted?.(ev.extracted_content); continue; }
+        if (typeof ev.warning === 'string') { h.onWarning?.(ev.warning); continue; }
+        if (typeof ev.notice === 'string') { h.onNotice?.(ev.notice); continue; }
+        if (ev.reset) { h.onReset?.(); continue; }
+        if (typeof ev.reasoning === 'string') { h.onReasoning?.(ev.reasoning); continue; }
+        if (typeof ev.result === 'string') { h.onResult?.(ev.result, (ev.meta as StreamResultMeta) ?? {}); continue; }
+        if (typeof ev.text === 'string') { h.onChunk?.(ev.text); }
       }
     }
+  } catch (err) {
+    if (!isAbort(err)) h.onError('Connection lost while streaming — the result may be incomplete.');
+    return;
   } finally {
     reader.releaseLock();
   }
-  onDone();
+  h.onDone();
 }
 
 // ── Summarize ──────────────────────────────────────────────────────────────
 
-/**
- * Stream a summarization of plain text via SSE.
- * The text endpoint has no extraction phase, so onPhase will not fire.
- */
-export async function summarize(
+/** Stream a summarization of plain text. */
+export function summarize(
   content: string,
   mode: string,
-  model: string | null,
-  onChunk: (text: string) => void,
-  onError: (message: string) => void,
-  onDone: () => void,
-  onWarning?: (message: string) => void,
+  handlers: StreamHandlers,
+  opts: { model?: string | null; title?: string; signal?: AbortSignal } = {},
 ): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch('/api/summarize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, mode, model }),
-    });
-  } catch {
-    onError('Network error — is the API server running?');
-    return;
-  }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    onError(body.detail ?? res.statusText);
-    return;
-  }
-  await consumeSSE(res, () => {}, onChunk, onError, onDone, undefined, onWarning);
+  return streamSSE('/api/summarize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, mode, model: opts.model ?? null, title: opts.title }),
+  }, handlers, opts.signal);
 }
 
-/**
- * Upload a file (audio/video/PDF) and stream extraction + summarization.
- * onPhase fires with (phase, detail) as backend progresses through extraction.
- */
-export async function summarizeFile(
+/** Upload a file (audio/video/PDF) and stream extraction + summarization. */
+export function summarizeFile(
   file: File,
   source: 'audio' | 'pdf',
   mode: string,
-  onPhase: (phase: string, detail: string) => void,
-  onChunk: (text: string) => void,
-  onError: (message: string) => void,
-  onDone: () => void,
-  enhancement?: Partial<EnhancementOptions>,
-  onExtracted?: (content: string, truncated: boolean) => void,
-  onWarning?: (message: string) => void,
+  handlers: StreamHandlers,
+  opts: { enhancement?: Partial<EnhancementOptions>; signal?: AbortSignal } = {},
 ): Promise<void> {
   const form = new FormData();
   form.append('file', file);
   form.append('source', source);
   form.append('mode', mode);
-  if (enhancement && source === 'audio') {
-    form.append('enhance_normalize', String(enhancement.normalize ?? false));
-    form.append('enhance_denoise',   String(enhancement.denoise   ?? false));
-    form.append('enhance_isolate',   String(enhancement.isolate   ?? false));
-    form.append('enhance_upsample',  String(enhancement.upsample  ?? false));
+  const e = opts.enhancement;
+  if (e && source === 'audio') {
+    form.append('enhance_normalize', String(e.normalize ?? false));
+    form.append('enhance_denoise',   String(e.denoise   ?? false));
+    form.append('enhance_isolate',   String(e.isolate   ?? false));
+    form.append('enhance_upsample',  String(e.upsample  ?? false));
   }
-
-  let res: Response;
-  try {
-    res = await fetch('/api/summarize/file', { method: 'POST', body: form });
-  } catch {
-    onError('Network error — is the API server running?');
-    return;
-  }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    onError(body.detail ?? res.statusText);
-    return;
-  }
-  await consumeSSE(res, onPhase, onChunk, onError, onDone, onExtracted, onWarning);
+  return streamSSE('/api/summarize/file', { method: 'POST', body: form }, handlers, opts.signal);
 }
 
-/**
- * Upload an image file and stream a vision-LLM summary via SSE.
- * Requires a vision-capable model selected in Settings → Ollama.
- * No extraction phases (image bytes go directly to the LLM).
- */
-export async function summarizeImage(
+/** Upload an image and stream a vision-LLM result. */
+export function summarizeImage(
   file: File,
   mode: string,
-  onChunk: (text: string) => void,
-  onError: (message: string) => void,
-  onDone: () => void,
-  onWarning?: (message: string) => void,
+  handlers: StreamHandlers,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const form = new FormData();
   form.append('file', file);
   form.append('mode', mode);
-
-  let res: Response;
-  try {
-    res = await fetch('/api/summarize/image', { method: 'POST', body: form });
-  } catch {
-    onError('Network error — is the API server running?');
-    return;
-  }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    onError(body.detail ?? res.statusText);
-    return;
-  }
-  await consumeSSE(res, () => {}, onChunk, onError, onDone, undefined, onWarning);
-}
-
-/**
- * Fetch a URL (YouTube or webpage) and stream extraction + summarization.
- * onPhase fires with (phase, detail) as backend progresses through extraction.
- */
-export async function summarizeUrl(
-  url: string,
-  source: 'youtube' | 'url',
-  mode: string,
-  preferCaptions: boolean,
-  onPhase: (phase: string, detail: string) => void,
-  onChunk: (text: string) => void,
-  onError: (message: string) => void,
-  onDone: () => void,
-  onExtracted?: (content: string, truncated: boolean) => void,
-  onWarning?: (message: string) => void,
-): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch('/api/summarize/url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, url, mode, prefer_captions: preferCaptions }),
-    });
-  } catch {
-    onError('Network error — is the API server running?');
-    return;
-  }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    onError(body.detail ?? res.statusText);
-    return;
-  }
-  await consumeSSE(res, onPhase, onChunk, onError, onDone, onExtracted, onWarning);
+  return streamSSE('/api/summarize/image', { method: 'POST', body: form }, handlers, opts.signal);
 }
 
 // ── Chat ───────────────────────────────────────────────────────────────────
 
-/**
- * Multi-turn streaming chat about a source document.
- *
- * Events:
- *   onChunk  — each text token from the model
- *   onNotice — informational notice (context compression, source truncation)
- *   onError  — terminal error
- *   onDone   — stream complete
- */
-export async function chat(
+/** Multi-turn streaming chat about a source document. */
+export function chat(
   content: string,
   messages: ChatMessage[],
-  onChunk: (text: string) => void,
-  onNotice: (notice: string) => void,
-  onError: (message: string) => void,
-  onDone: () => void,
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
 ): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, messages }),
-    });
-  } catch {
-    onError('Network error — is the API server running?');
-    return;
-  }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    onError(body.detail ?? res.statusText);
-    return;
-  }
-
-  const reader  = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const payload = line.slice(6);
-        if (payload === '[DONE]') { onDone(); return; }
-        try {
-          const ev = JSON.parse(payload);
-          if (ev.error)  { onError(ev.error); return; }
-          if (ev.notice) { onNotice(ev.notice); continue; }
-          if (ev.text)   { onChunk(ev.text); }
-        } catch { /* skip */ }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  onDone();
+  return streamSSE('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, messages }),
+  }, handlers, signal);
 }
 
 // ── Persistent Jobs API ────────────────────────────────────────────────────

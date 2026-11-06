@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { ArrowLeft, Save, RefreshCw, AlertTriangle, Check, Wifi, WifiOff, Loader, Download, Play } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import * as api from '../api/client';
-import type { AudioModelMap, Capabilities, OllamaModel, Settings as SettingsType, TTSStatus, TTSVoiceMap } from '../types';
+import type { AudioModelMap, Capabilities, OllamaModel, OllamaModelInfo, Settings as SettingsType, TTSStatus, TTSVoiceMap } from '../types';
 import './Settings.css';
 
 type Section = 'transcription' | 'application' | 'security' | 'ollama' | 'enhancement' | 'tts' | 'youtube';
@@ -61,6 +61,7 @@ export default function Settings() {
   const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false);
   const [testingConn, setTestingConn]         = useState(false);
   const [connStatus, setConnStatus]           = useState<{ ok: boolean; message: string } | null>(null);
+  const [modelInfo, setModelInfo]             = useState<OllamaModelInfo | null>(null);
 
   // Audio enhancement models
   const [audioModels, setAudioModels]         = useState<AudioModelMap | null>(null);
@@ -116,6 +117,18 @@ export default function Settings() {
   useEffect(() => {
     if (section === 'ollama') loadOllamaModels();
   }, [section, loadOllamaModels]);
+
+  // Details (max context, capabilities) for the model selected in the draft.
+  const draftModel = draft.ollama_model;
+  useEffect(() => {
+    setModelInfo(null);
+    if (section !== 'ollama' || !draftModel) return;
+    let cancelled = false;
+    api.getOllamaModelInfo(draftModel)
+      .then(info => { if (!cancelled) setModelInfo(info); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [section, draftModel]);
 
   const loadAudioModels = useCallback(async () => {
     setAudioModelsLoading(true);
@@ -221,6 +234,18 @@ export default function Settings() {
 
   const set = (key: keyof SettingsType, value: string) => {
     setDraft(d => ({ ...d, [key]: value }));
+  };
+
+  const contextOverrides = (): Record<string, number> => {
+    try { return JSON.parse(draft.ollama_context_overrides || '{}'); } catch { return {}; }
+  };
+
+  /** Set (or clear, with null) the context override for one model. */
+  const setContextOverride = (model: string, tokens: number | null) => {
+    const next = contextOverrides();
+    if (tokens && tokens > 0) next[model] = tokens;
+    else delete next[model];
+    set('ollama_context_overrides', JSON.stringify(next));
   };
 
   const handleTestConnection = async () => {
@@ -513,7 +538,8 @@ export default function Settings() {
                       <div>
                         <p className="settings-label" style={{ marginBottom: 2 }}>Enable Thinking Mode</p>
                         <p className="settings-label-hint" style={{ margin: 0 }}>
-                          Model reasons step-by-step before answering (gemma4 <code>&lt;|think|&gt;</code> token)
+                          Model reasons step-by-step before answering. Uses Ollama's native thinking;
+                          ignored for models without thinking support.
                         </p>
                       </div>
                       <button
@@ -547,26 +573,84 @@ export default function Settings() {
                     </div>
                   </div>
 
-                  {/* Token Budget */}
+                  {/* Context window (per model) */}
+                  {d.ollama_model && (
+                    <div className="settings-field">
+                      <label className="settings-label" htmlFor="ollama-context">
+                        Context window for {d.ollama_model}
+                        <span className="settings-label-hint">
+                          {modelInfo?.context_length
+                            ? `Model maximum: ${modelInfo.context_length.toLocaleString()} tokens. Leave blank to use it. Larger windows use more VRAM.`
+                            : 'Leave blank to use the model\'s own maximum. Larger windows use more VRAM.'}
+                        </span>
+                      </label>
+                      <div className="settings-test-row">
+                        <input
+                          id="ollama-context"
+                          type="number"
+                          className="settings-input settings-input--narrow"
+                          min="2048"
+                          step="1024"
+                          placeholder={modelInfo?.context_length ? String(modelInfo.context_length) : 'model default'}
+                          value={contextOverrides()[d.ollama_model] ?? ''}
+                          onChange={e => setContextOverride(d.ollama_model, parseInt(e.target.value, 10) || null)}
+                        />
+                        {contextOverrides()[d.ollama_model] !== undefined && (
+                          <button
+                            className="settings-test-btn"
+                            type="button"
+                            onClick={() => setContextOverride(d.ollama_model, null)}
+                          >
+                            Reset to model default
+                          </button>
+                        )}
+                      </div>
+                      {modelInfo && modelInfo.capabilities.length > 0 && (
+                        <p className="settings-label-hint" style={{ marginTop: 6 }}>
+                          Capabilities: {modelInfo.capabilities.join(', ')}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Output budget */}
                   <div className="settings-field">
-                    <label className="settings-label" htmlFor="ollama-budget">
-                      Visual Token Budget
+                    <label className="settings-label" htmlFor="ollama-output-budget">
+                      Output budget (tokens)
                       <span className="settings-label-hint">
-                        Controls image/document processing detail. Higher = more accurate, slower.
+                        Room reserved for each reply, reasoning included. Content beyond the remaining
+                        context is processed in parts automatically.
                       </span>
                     </label>
-                    <select
-                      id="ollama-budget"
-                      className="settings-select settings-input--narrow"
-                      value={d.ollama_token_budget ?? '280'}
-                      onChange={e => set('ollama_token_budget', e.target.value)}
-                    >
-                      <option value="70">70 — Fastest, basic classification</option>
-                      <option value="140">140 — Quick captioning, video</option>
-                      <option value="280">280 — Balanced (default)</option>
-                      <option value="560">560 — Detailed OCR, documents</option>
-                      <option value="1120">1120 — Maximum detail, small text</option>
-                    </select>
+                    <input
+                      id="ollama-output-budget"
+                      type="number"
+                      className="settings-input settings-input--narrow"
+                      min="1024"
+                      step="1024"
+                      value={d.ollama_output_budget ?? '32768'}
+                      onChange={e => set('ollama_output_budget', e.target.value)}
+                    />
+                  </div>
+
+                  {/* Global cap */}
+                  <div className="settings-field">
+                    <label className="settings-label" htmlFor="ollama-context-cap">
+                      Global context cap (optional)
+                      <span className="settings-label-hint">
+                        Upper limit applied to every model, e.g. to fit a smaller GPU. Blank = no cap.
+                      </span>
+                    </label>
+                    <input
+                      id="ollama-context-cap"
+                      type="number"
+                      className="settings-input settings-input--narrow"
+                      min="2048"
+                      step="1024"
+                      placeholder="none"
+                      value={d.ollama_context_cap ?? ''}
+                      onChange={e => set('ollama_context_cap', e.target.value)}
+                    />
                   </div>
 
                   {/* Timeout */}

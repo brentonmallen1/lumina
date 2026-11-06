@@ -115,8 +115,12 @@ export interface Settings {
   ollama_model: string;
   ollama_timeout: string;
   ollama_thinking_enabled: string;
-  ollama_token_budget: string;
-  ollama_context_size: string;
+  /** Tokens reserved for the reply (reasoning + answer). */
+  ollama_output_budget: string;
+  /** JSON {model: tokens}; models not listed use their own maximum context. */
+  ollama_context_overrides: string;
+  /** Optional global context cap in tokens; blank = none. */
+  ollama_context_cap: string;
   ollama_vision_override: string;
   // Enhancement defaults
   enhance_normalize: string;
@@ -189,6 +193,18 @@ export interface Prompt {
   is_default:    boolean;
   created_at:    string;
   updated_at:    string;
+  /** How results render: markdown | mindmap | json:<renderer>. */
+  output_type?:  string;
+}
+
+export interface OllamaModelInfo {
+  context_length: number | null;
+  parameter_size: string | null;
+  capabilities:   string[];
+  /** Per-model override from settings, if any. */
+  override:       number | null;
+  /** Context Lumina will actually request for this model. */
+  effective_context: number;
 }
 
 export interface ChatMessage {

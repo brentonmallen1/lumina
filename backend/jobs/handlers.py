@@ -28,7 +28,7 @@ async def handle_transcribe(job: dict) -> dict | None:
     - input_file: path to audio file (relative to AUDIO_CACHE)
     """
     from audio import AudioPipeline, EnhancementOptions
-    from transcriber import load_engine
+    from transcriber import get_engine
     import os
 
     job_id = job["id"]
@@ -71,7 +71,7 @@ async def handle_transcribe(job: dict) -> dict | None:
     db.update_job_status(job_id, "running", "Transcribing...")
     logger.info(f"Job {job_id}: Transcribing {processed_path}")
 
-    engine = load_engine()
+    engine = await asyncio.to_thread(get_engine)
     if engine is None:
         raise RuntimeError("Transcription engine not loaded")
 
@@ -154,13 +154,17 @@ async def handle_enhance(job: dict) -> dict | None:
     }
 
 
+class JobCancelled(Exception):
+    """Raised by a handler when it notices the user cancelled its job."""
+
+
 async def handle_extract(job: dict) -> dict | None:
-    """Handle content extraction jobs (YouTube, URL, PDF, etc).
+    """Handle content extraction jobs (YouTube, URL, PDF, audio, video).
 
     Job config expected:
     - prefer_captions: bool (for YouTube)
     """
-    from extractors import get_extractor
+    from sources import extract_source
 
     job_id = job["id"]
     source_type = job.get("source_type")
@@ -173,40 +177,32 @@ async def handle_extract(job: dict) -> dict | None:
     db.update_job_status(job_id, "running", f"Extracting from {source_type}...")
     logger.info(f"Job {job_id}: Extracting from {source_type}: {source_ref}")
 
-    # Get appropriate extractor
-    extractor = get_extractor(source_type)
-    if extractor is None:
-        raise ValueError(f"Unknown source type: {source_type}")
-
-    # Async status callback to update job progress
     async def on_status(phase: str, detail: str) -> None:
         db.update_job_status(job_id, "running", detail)
 
-    # Run extraction
-    text = await extractor.extract(source_ref, on_status)
+    text, meta = await extract_source(source_type, source_ref, config=config, on_status=on_status)
 
     return {
         "result": text,
-        "result_meta": {"char_count": len(text)},
+        "result_meta": {"char_count": len(text), "source_meta": meta},
     }
 
 
 async def handle_summarize(job: dict) -> dict | None:
-    """Handle summarization jobs.
+    """Handle summarization jobs — the path the UI uses for YouTube and URLs.
 
-    Job config expected:
-    - mode: summary type (summary, key_points, mind_map, etc.)
+    Job config:
+    - mode: summary type (summary, key_points, mind_map, …)
     - model: optional model override
-    - extracted_text: the text to summarize (optional - will extract if source provided)
+    - extracted_text: text to process (skips extraction when present)
+    - prefer_captions / refresh / language: extraction options
 
-    Job fields used:
-    - source_type: url, youtube, pdf, etc (triggers extraction)
-    - source_ref: the URL or path to extract from
+    Everything LLM-related goes through llm.runner, the same path as the
+    streaming endpoints (context window, thinking, budgets, JSON validation).
     """
-    from llm import OllamaClient
-    from llm.prompts import get_prompt
-    from extractors import get_extractor
-    from extractors.pdf import PDFExtractor
+    import time
+    from llm.runner import build_source_header, compose_document, resolve_runtime, run_mode
+    from sources import extract_source
 
     job_id = job["id"]
     config = job.get("config") or {}
@@ -214,116 +210,109 @@ async def handle_summarize(job: dict) -> dict | None:
     source_type = job.get("source_type")
     source_ref = job.get("source_ref")
 
-    # Get LLM settings early (needed for vision check)
     settings = db.get_all_settings()
-    model = config.get("model") or settings.get("ollama_model")
-    if not model:
-        raise ValueError("No LLM model configured - check settings")
-
-    client = OllamaClient(
-        base_url=settings.get("ollama_url", "http://localhost:11434"),
-        timeout=float(settings.get("ollama_timeout", "120")),
-    )
+    rt = await resolve_runtime(settings, config.get("model"))
 
     async def on_status(phase: str, detail: str) -> None:
-        db.update_job_status(job_id, "running", detail)
+        if db.update_job_progress(job_id, status_detail=detail) == "cancelled":
+            raise JobCancelled()
 
-    # Get prompt template
-    prompt_data = get_prompt(mode)
-    if not prompt_data:
-        raise ValueError(f"Unknown summarization mode: {mode}")
+    images: list[str] | None = None
+    source_meta: dict = config.get("source_meta") or {}
+    content = config.get("extracted_text") or ""
 
-    system_prompt = prompt_data.get("system", "")
-    template = prompt_data.get("template", "{content}")
-
-    # Check for vision-first PDF handling
-    if source_type == "pdf" and source_ref:
+    if not content and source_type == "pdf" and source_ref:
+        from extractors.pdf import PDFExtractor
         file_path = Path(source_ref)
         if not file_path.exists():
             raise FileNotFoundError(f"PDF file not found: {source_ref}")
-
-        extractor = PDFExtractor()
-
-        # Try vision first if model supports it
-        vision_override = settings.get("ollama_vision_override", "false") == "true" or None
-        if await client.supports_vision(model, override=vision_override):
-            db.update_job_status(job_id, "running", "Rendering PDF for vision model...")
-            logger.info(f"Job {job_id}: Using vision mode for PDF")
+        source_meta = {"title": file_path.stem}
+        if rt.supports_vision:
+            await on_status("extracting", "Rendering PDF for vision model...")
             try:
-                images = await extractor.extract_images(file_path, on_status)
-                if images:
-                    db.update_job_status(job_id, "running", "Analyzing PDF with vision model...")
-                    user_prompt = template.replace(
-                        "{content}",
-                        f"[PDF with {len(images)} page(s) attached as images]"
-                    )
-                    response_text = ""
-                    async for chunk in client.generate_stream(
-                        user_prompt, model, system_prompt, images=images
-                    ):
-                        response_text += chunk
-
-                    return {
-                        "result": response_text,
-                        "result_meta": {
-                            "mode": mode,
-                            "source_type": source_type,
-                            "vision_mode": True,
-                            "pages_processed": len(images),
-                            "char_count": len(response_text),
-                        },
-                    }
+                images = await PDFExtractor().extract_images(file_path, on_status)
+            except JobCancelled:
+                raise
             except Exception as e:
-                logger.warning(f"Job {job_id}: Vision extraction failed, falling back to text: {e}")
-
-        # Fall back to text extraction
-        db.update_job_status(job_id, "running", "Extracting text from PDF...")
-        logger.info(f"Job {job_id}: Using text extraction for PDF")
-        extracted_text = await extractor.extract(file_path, on_status)
-
-    # Get text - either from config or by extracting from source
-    elif not config.get("extracted_text") and source_type and source_ref:
-        db.update_job_status(job_id, "running", f"Extracting from {source_type}...")
-        logger.info(f"Job {job_id}: Extracting from {source_type}: {source_ref}")
-
-        # Construct extractor based on source type
-        if source_type == "youtube":
-            from extractors.youtube import YouTubeExtractor
-            from transcriber import load_engine
-            engine = load_engine()
-            if engine is None:
-                raise RuntimeError("Transcription engine not loaded")
-            prefer_captions = config.get("prefer_captions", True)
-            extractor = YouTubeExtractor(engine=engine, prefer_captions=prefer_captions)
+                logger.warning(f"Job {job_id}: Vision rendering failed, falling back to text: {e}")
+                images = None
+        if images:
+            content = f"[PDF with {len(images)} page(s) attached as images]"
         else:
-            extractor = get_extractor(source_type)
-            if extractor is None:
-                raise ValueError(f"Unknown source type: {source_type}")
+            content = await PDFExtractor().extract(file_path, on_status)
+    elif not content and source_type and source_ref:
+        content, source_meta = await extract_source(
+            source_type, source_ref, config=config, settings=settings, on_status=on_status,
+        )
 
-        extracted_text = await extractor.extract(source_ref, on_status)
-    else:
-        extracted_text = config.get("extracted_text")
-
-    if not extracted_text:
+    if not content:
         raise ValueError("No text to summarize - provide extracted_text or source")
 
-    db.update_job_status(job_id, "running", "Generating summary...")
-    logger.info(f"Job {job_id}: Summarizing with mode={mode}")
+    if source_meta.get("title") and source_meta["title"] != job.get("source_title"):
+        db.update_job_title(job_id, source_meta["title"])
 
-    # Build prompt with content
-    user_prompt = template.replace("{content}", extracted_text)
+    header = build_source_header(source_meta)
+    await on_status("thinking", f"Processing with {mode} mode…")
+    logger.info(f"Job {job_id}: mode={mode} model={rt.model} num_ctx={rt.num_ctx}")
 
-    response_text = ""
-    async for chunk in client.generate_stream(user_prompt, model, system_prompt):
-        response_text += chunk
+    text_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    warnings: list[str] = []
+    final: dict = {}
+    last_write = 0.0
+
+    async for ev in run_mode(content, mode, rt, header=header, source_meta=source_meta, images=images):
+        kind = ev["type"]
+        if kind == "text":
+            text_parts.append(ev["text"])
+        elif kind == "thinking":
+            reasoning_parts.append(ev["text"])
+        elif kind == "reset":
+            text_parts.clear()
+        elif kind == "warning":
+            warnings.append(ev["message"])
+        elif kind == "status":
+            await on_status("thinking", ev["detail"])
+        elif kind == "result":
+            final = ev
+
+        now = time.monotonic()
+        if kind in ("text", "thinking") and now - last_write > 1.0:
+            last_write = now
+            detail = "Thinking…" if not text_parts else "Writing…"
+            status = db.update_job_progress(job_id, status_detail=detail, partial_result="".join(text_parts))
+            if status == "cancelled":
+                raise JobCancelled()
+
+    result_text = final.get("text", "".join(text_parts))
+    meta = final.get("meta", {})
+    reasoning = final.get("reasoning") or "".join(reasoning_parts)
+
+    # Save to history server-side so the result is kept even if the user
+    # navigated away while the job ran.
+    if result_text:
+        try:
+            db.create_history_entry(
+                mode=mode,
+                source=source_type or "text",
+                result=result_text,
+                reasoning=reasoning,
+                source_detail=source_ref or "",
+            )
+        except Exception as e:
+            logger.warning(f"Job {job_id}: could not save history: {e}")
 
     return {
-        "result": response_text,
+        "result": result_text,
         "result_meta": {
-            "mode": mode,
+            **{k: v for k, v in meta.items() if k != "data"},
             "source_type": source_type,
-            "char_count": len(response_text),
-            "extracted_text": extracted_text,
+            "source_meta": source_meta,
+            "char_count": len(result_text),
+            "reasoning": reasoning,
+            "warnings": warnings,
+            # Full source (with header) so chat sees title, description and chapters too.
+            "extracted_text": compose_document(header, content) if not images else "",
         },
     }
 

@@ -2,7 +2,9 @@
 Default summarization prompt templates.
 
 Each mode has a system prompt and a user template with a `{content}` placeholder.
-These are hardcoded defaults; a CRUD UI for custom prompts is planned for Phase 5.
+These are the built-in defaults; they are seeded into the DB, where users can
+override them from the Prompts page. Runtime properties that are *not*
+user-editable (temperature, thinking, JSON schema, renderer) live in MODE_META.
 """
 
 PROMPTS: dict[str, dict[str, str]] = {
@@ -259,6 +261,78 @@ Output a single JSON object with these exact fields:
 
 Output ONLY the JSON object.""",
 }
+
+
+# ── Per-mode runtime metadata ──────────────────────────────────────────────
+#
+# Prompt *text* is user-editable (stored in the DB); these runtime properties
+# are not. A custom prompt for a built-in mode inherits that mode's metadata.
+#
+#   temperature  sampling temperature (extraction modes run cool)
+#   think        True/False forces thinking on/off; None follows the global setting
+#   format       JSON schema passed to Ollama structured outputs (None = free text)
+#   output_type  how the frontend renders the result: markdown | mindmap | json:<renderer>
+
+RECIPE_JSONLD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "@context":           {"type": "string"},
+        "@type":              {"type": "string"},
+        "name":               {"type": "string"},
+        "description":        {"type": "string"},
+        "prepTime":           {"type": ["string", "null"]},
+        "cookTime":           {"type": ["string", "null"]},
+        "totalTime":          {"type": ["string", "null"]},
+        "recipeYield":        {"type": ["string", "null"]},
+        "recipeIngredient":   {"type": "array", "items": {"type": "string"}},
+        "recipeInstructions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"@type": {"type": "string"}, "text": {"type": "string"}},
+                "required": ["text"],
+            },
+        },
+    },
+    "required": ["name", "recipeIngredient", "recipeInstructions"],
+}
+
+DEFAULT_META: dict = {"temperature": 0.7, "think": None, "format": None, "output_type": "markdown"}
+
+MODE_META: dict[str, dict] = {
+    "summary":         {"temperature": 0.7},
+    "key_points":      {"temperature": 0.6},
+    "mind_map":        {"temperature": 0.5, "output_type": "mindmap"},
+    "action_items":    {"temperature": 0.4},
+    "q_and_a":         {"temperature": 0.6},
+    "tldr":            {"temperature": 0.6},
+    "extract_list":    {"temperature": 0.2},
+    "recipe":          {"temperature": 0.3},
+    "recipe_jsonld":   {"temperature": 0.1, "format": RECIPE_JSONLD_SCHEMA, "output_type": "json:recipe"},
+    "meeting_minutes": {"temperature": 0.4},
+}
+
+
+def get_mode_meta(mode: str) -> dict:
+    """Runtime metadata for a mode (defaults merged with the mode's overrides)."""
+    return {**DEFAULT_META, **MODE_META.get(mode, {})}
+
+
+def render_template(template: str, content: str) -> str:
+    """Substitute ``{content}`` into a prompt template.
+
+    Uses plain replacement (never str.format) so user templates containing
+    literal braces — JSON examples, code — are safe. ``{{``/``}}`` escapes from
+    the built-in templates are unescaped. A template without ``{content}`` gets
+    the content appended, so a custom prompt can never silently drop the source.
+    """
+    marker = "\x00CONTENT\x00"
+    if "{content}" in template:
+        t = template.replace("{content}", marker)
+    else:
+        t = template.rstrip() + "\n\n" + marker
+    t = t.replace("{{", "{").replace("}}", "}")
+    return t.replace(marker, content)
 
 
 def get_prompt(mode: str) -> dict[str, str]:

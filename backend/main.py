@@ -37,8 +37,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import db
 from db import init_db, get_all_settings, update_settings as db_update_settings
 from llm import OllamaClient
-from llm.prompts import get_prompt, RECIPE_JSONLD_PROMPT
-from transcriber import load_engine
+from transcriber import load_engine, set_shared_engine
 from audio import AudioPipeline, EnhancementOptions, get_model_status, download_model
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -54,6 +53,8 @@ ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm", ".opus",
 _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v"}
 
 security = HTTPBasic(auto_error=False)
+
+_SSE_HEADERS = {"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
 
 # ── Settings (DB-backed) ───────────────────────────────────────────────────
 # Loaded at startup via init_db() + _reload_settings(), then refreshed
@@ -159,6 +160,7 @@ def _load_engine_background() -> None:
 
     try:
         _engine = load_engine()
+        set_shared_engine(_engine)
         _engine_status = "ready"
         _engine_message = "Ready"
     except Exception as exc:
@@ -217,6 +219,10 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Lumina", lifespan=lifespan)
+
+from routers.llm import router as llm_router  # noqa: E402
+
+app.include_router(llm_router, dependencies=[Depends(verify_auth)])
 
 app.add_middleware(
     CORSMiddleware,
@@ -389,8 +395,14 @@ async def get_settings(_: bool = Depends(verify_auth)):
 @app.put("/api/settings")
 async def put_settings(updates: dict[str, str], _: bool = Depends(verify_auth)):
     old = get_all_settings()
-    new = db_update_settings(updates)
+    try:
+        new = db_update_settings(updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     _reload_settings()
+    if any(k.startswith("ollama_") for k in updates):
+        from llm.runner import clear_profile_cache
+        clear_profile_cache()
 
     engine_changed = any(
         old.get(k) != new.get(k)
@@ -446,13 +458,26 @@ async def ollama_models(_: bool = Depends(verify_auth)):
 @app.get("/api/ollama/model/{name:path}")
 async def ollama_model_info(name: str, _: bool = Depends(verify_auth)):
     """
-    Get detailed info for a specific model including context_length.
-    Returns {context_length, parameter_size} or 404 if not found.
+    Model details for the Settings UI: the model's own max context, its
+    capabilities (thinking / vision), and the context Lumina will actually use
+    (per-model override → model max, then the optional global cap).
     """
+    from llm.runner import ModelProfile, _context_overrides, resolve_num_ctx
+
     info = await _ollama_client().get_model_info(name)
     if not info:
         raise HTTPException(status_code=404, detail="Model not found")
-    return info
+    profile = ModelProfile(
+        name=name,
+        context_length=info.get("context_length"),
+        modelfile_num_ctx=info.get("modelfile_num_ctx"),
+        capabilities=set(info.get("capabilities") or []),
+    )
+    return {
+        **info,
+        "override": _context_overrides(_settings).get(name),
+        "effective_context": resolve_num_ctx(_settings, name, profile),
+    }
 
 
 # ── Prompts ────────────────────────────────────────────────────────────────
@@ -472,8 +497,13 @@ class PromptUpdate(BaseModel):
 
 @app.get("/api/prompts")
 async def list_prompts(_: bool = Depends(verify_auth)):
-    """List all prompts (built-in + custom), ordered built-in first then by name."""
-    return db.get_all_prompts()
+    """List all prompts (built-in + custom), ordered built-in first then by name.
+
+    Each prompt includes ``output_type`` (markdown | mindmap | json:<renderer>)
+    so the frontend knows how to render that mode's results.
+    """
+    from llm.prompts import get_mode_meta
+    return [{**p, "output_type": get_mode_meta(p["mode"])["output_type"]} for p in db.get_all_prompts()]
 
 
 @app.post("/api/prompts", status_code=201)
@@ -758,586 +788,6 @@ async def tts_synthesize(req: TTSSynthesizeRequest, _: bool = Depends(verify_aut
     return Response(content=audio_bytes, media_type="audio/wav")
 
 
-# ── Translation ───────────────────────────────────────────────────────────
-
-class TranslateRequest(BaseModel):
-    text:            str
-    target_language: str
-    source_language: str = "auto"
-
-
-@app.post("/api/translate")
-async def translate_text(req: TranslateRequest, _: bool = Depends(verify_auth)):
-    """
-    Stream a translation via SSE using the configured Ollama model.
-
-    Events:
-      {"text": "...chunk..."}   — LLM output token
-      {"error": "..."}          — terminal error
-      [DONE]
-    """
-    async def event_stream():
-        model = _settings.get("ollama_model", "")
-        if not model:
-            yield f'data: {json.dumps({"error": "No Ollama model configured — go to Settings → Ollama."})}\n\n'
-            yield "data: [DONE]\n\n"
-            return
-
-        src = "" if req.source_language == "auto" else f" from {req.source_language}"
-        prompt = (
-            f"Translate the following text{src} to {req.target_language}.\n"
-            f"Output ONLY the translation — no explanations, no introductory phrases.\n\n"
-            f"{req.text}"
-        )
-        system = "You are a professional translator. Provide accurate, natural translations."
-        client = _ollama_client()
-        try:
-            async for chunk in client.generate_stream(prompt, model=model, system=system):
-                yield f"data: {json.dumps({'text': chunk})}\n\n"
-        except Exception as exc:
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
-
-
-# ── Chat ───────────────────────────────────────────────────────────────────
-
-class ChatRequest(BaseModel):
-    content:  str                  # source document text to chat about
-    messages: list[dict]           # conversation history: [{role, content}, ...]
-    model:    str | None = None    # optional model override
-
-
-@app.post("/api/chat")
-async def chat_endpoint(req: ChatRequest, _: bool = Depends(verify_auth)):
-    """
-    Multi-turn chat about a source document, streamed via SSE.
-
-    The source content is injected into the system prompt.  Old history is
-    automatically summarized when the context budget is exceeded.
-
-    Events:
-      {"text": "...chunk..."}         — LLM output token
-      {"notice": "..."}               — informational (context compression, truncation)
-      {"error": "..."}                — terminal error
-      [DONE]
-    """
-    from llm.context import build_system_prompt, prepare_messages
-
-    async def event_stream():
-        model = req.model or _settings.get("ollama_model", "")
-        if not model:
-            yield f'data: {json.dumps({"error": "No Ollama model configured — go to Settings → Ollama to select one."})}\n\n'
-            yield "data: [DONE]\n\n"
-            return
-
-        ctx_size = int(_settings.get("ollama_context_size", "32768"))
-
-        system_prompt, was_truncated = build_system_prompt(req.content)
-        if was_truncated:
-            yield f"data: {json.dumps({'notice': 'The source content was truncated to fit the context window.'})}\n\n"
-
-        client = _ollama_client()
-        try:
-            messages, compression_notice = await prepare_messages(
-                system_prompt, req.messages, client, model
-            )
-        except Exception as exc:
-            yield f"data: {json.dumps({'error': f'Context preparation failed: {exc}'})}\n\n"
-            yield "data: [DONE]\n\n"
-            return
-
-        if compression_notice:
-            yield f"data: {json.dumps({'notice': compression_notice})}\n\n"
-
-        try:
-            async for chunk in client.chat_stream(messages, model, num_ctx=ctx_size):
-                yield f"data: {json.dumps({'text': chunk})}\n\n"
-        except Exception as exc:
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
-
-
-# ── Summarization ──────────────────────────────────────────────────────────
-
-class SummarizeRequest(BaseModel):
-    content: str
-    mode: str = "summary"       # summary | key_points | mind_map
-    model: str | None = None    # override the model from settings
-
-
-@app.post("/api/summarize")
-async def summarize_content(req: SummarizeRequest, _: bool = Depends(verify_auth)):
-    """
-    Stream an AI summary of plain text content via Server-Sent Events.
-
-    Emits:  data: {"text": "..."}  |  data: [DONE]  |  data: {"error": "..."}
-    The gemma4 thinking block (<|channel>...<channel|>) is passed through as-is.
-    """
-    async def event_stream():
-        async for sse_line in _llm_summarize_sse(req.content, req.mode, req.model):
-            yield sse_line
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
-    )
-
-
-# ── Shared LLM streaming helper ────────────────────────────────────────────
-
-async def _llm_summarize_sse(content: str, mode: str, model_override: str | None, title: str | None = None):
-    """
-    Async generator — yields SSE lines for an LLM summarization run.
-    Shared by all three /api/summarize* endpoints.
-    """
-    model = model_override or _settings.get("ollama_model", "")
-    if not model:
-        yield f'data: {json.dumps({"error": "No Ollama model configured — go to Settings → Ollama to select one."})}\n\n'
-        yield "data: [DONE]\n\n"
-        return
-
-    prompt_data = get_prompt(mode)
-    titled_content = f"Content title: {title}\n\n{content}" if title else content
-    prompt      = prompt_data["template"].format(content=titled_content)
-    system      = prompt_data["system"]
-    thinking    = _settings.get("ollama_thinking_enabled", "true") == "true"
-    budget      = int(_settings.get("ollama_token_budget", "280"))
-    ctx_size    = int(_settings.get("ollama_context_size", "32768"))
-
-    # Estimate tokens (~4 chars/token) and warn if likely to exceed context
-    est_tokens = (len(prompt) + len(system or "")) // 4
-    if est_tokens > ctx_size * 0.9:
-        yield f"data: {json.dumps({'warning': f'Content is large (~{est_tokens:,} tokens). Output may be truncated. Context limit: {ctx_size:,} tokens.'})}\n\n"
-
-    try:
-        async for chunk in _ollama_client().generate_stream(
-            prompt, model, system,
-            thinking_enabled=thinking,
-            token_budget=budget,
-            num_ctx=ctx_size,
-        ):
-            yield f"data: {json.dumps({'text': chunk})}\n\n"
-    except Exception as exc:
-        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-
-    yield "data: [DONE]\n\n"
-
-
-async def _pdf_vision_summarize_sse(file_path: Path, mode: str, model_override: str | None, title: str | None = None):
-    """
-    Vision-based PDF summarization via SSE.
-    Renders PDF pages as images and sends to a vision-capable LLM.
-    Caller should verify model supports vision before calling.
-    """
-    from extractors.pdf import PDFExtractor
-
-    model = model_override or _settings.get("ollama_model", "")
-    if not model:
-        yield f'data: {json.dumps({"error": "No Ollama model configured — go to Settings → Ollama to select one."})}\n\n'
-        yield "data: [DONE]\n\n"
-        return
-
-    yield f"data: {json.dumps({'phase': 'extracting', 'detail': 'Rendering PDF pages for vision model…'})}\n\n"
-
-    extractor = PDFExtractor()
-
-    async def on_status(phase: str, detail: str) -> None:
-        pass
-
-    try:
-        images = await extractor.extract_images(file_path, on_status)
-    except Exception as exc:
-        yield f"data: {json.dumps({'error': f'Failed to render PDF: {exc}'})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
-
-    if not images:
-        yield f"data: {json.dumps({'error': 'No pages could be rendered from this PDF.'})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
-
-    yield f"data: {json.dumps({'phase': 'thinking', 'detail': f'Analyzing {len(images)} page(s) with vision model…'})}\n\n"
-
-    prompt_data = get_prompt(mode)
-    content_desc = f"[PDF with {len(images)} page(s) attached as images]"
-    if title:
-        content_desc = f"Document title: {title}\n\n{content_desc}"
-    prompt = prompt_data["template"].format(content=content_desc)
-    system = prompt_data["system"]
-    thinking = _settings.get("ollama_thinking_enabled", "true") == "true"
-    budget = int(_settings.get("ollama_token_budget", "280"))
-    ctx_size = int(_settings.get("ollama_context_size", "32768"))
-
-    try:
-        async for chunk in _ollama_client().generate_stream(
-            prompt, model, system,
-            images=images,
-            thinking_enabled=thinking,
-            token_budget=budget,
-            num_ctx=ctx_size,
-        ):
-            yield f"data: {json.dumps({'text': chunk})}\n\n"
-    except Exception as exc:
-        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-
-    yield "data: [DONE]\n\n"
-
-
-async def _extract_and_summarize_sse(
-    extractor,
-    source_arg,
-    mode: str,
-    model_override: str | None,
-    title: str | None = None,
-    description: str | None = None,
-):
-    """
-    Async generator that:
-      1. Runs an extractor, forwarding status events as SSE phase events.
-      2. Streams the LLM summarization of the extracted content.
-    """
-    q: asyncio.Queue = asyncio.Queue()
-
-    async def on_status(phase: str, detail: str) -> None:
-        q.put_nowait({"phase": phase, "detail": detail})
-
-    extract_task = asyncio.create_task(extractor.extract(source_arg, on_status))
-
-    # Forward phase events while extraction runs
-    while not extract_task.done():
-        try:
-            yield f"data: {json.dumps(q.get_nowait())}\n\n"
-        except asyncio.QueueEmpty:
-            await asyncio.sleep(0.05)
-
-    # Drain any remaining events
-    while not q.empty():
-        yield f"data: {json.dumps(q.get_nowait())}\n\n"
-
-    # Unwrap result or surface error
-    try:
-        content = extract_task.result()
-    except Exception as exc:
-        yield f"data: {json.dumps({'error': f'Extraction failed: {exc}'})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
-
-    # Prepend source description if available (useful for recipe extraction from YouTube)
-    if description:
-        content = f"Source description:\n{description}\n\n---\n\nTranscript:\n{content}"
-
-    # Emit extracted text so the frontend can use it for chat
-    # Cap at SOURCE_CONTENT_LIMIT to avoid huge SSE payloads
-    _SOURCE_LIMIT = 32_000
-    yield f"data: {json.dumps({'extracted_content': content[:_SOURCE_LIMIT]})}\n\n"
-
-    # Transcript mode: return raw extracted text without LLM processing
-    if mode == "transcript":
-        yield f"data: {json.dumps({'text': content})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
-
-    # Signal LLM processing phase
-    yield f"data: {json.dumps({'phase': 'thinking', 'detail': f'Processing with {mode} mode…'})}\n\n"
-
-    async for sse_line in _llm_summarize_sse(content, mode, model_override, title=title):
-        yield sse_line
-
-
-_SSE_HEADERS = {"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
-
-
-# ── Summarize from file (audio / video / PDF) ──────────────────────────────
-
-@app.post("/api/summarize/file")
-async def summarize_file(
-    source:            str        = Form(...),         # "audio" | "pdf"
-    mode:              str        = Form("summary"),
-    file:              UploadFile = File(...),
-    enhance_normalize: bool       = Form(False),
-    enhance_denoise:   bool       = Form(False),
-    enhance_isolate:   bool       = Form(False),
-    enhance_separate:  bool       = Form(False),
-    enhance_upsample:  bool       = Form(False),
-    _: bool = Depends(verify_auth),
-):
-    """
-    Upload a file and stream an AI summary via SSE.
-
-    source="audio"  — audio or video file → (optional enhancement) → Whisper → LLM
-    source="pdf"    — PDF file → pdfplumber → LLM
-    """
-    from extractors.audio import AudioExtractor
-    from extractors.video import VideoExtractor
-    from extractors.pdf   import PDFExtractor
-
-    contents = await file.read()
-    filepath = Path(file.filename or "upload")
-    suffix   = filepath.suffix.lower()
-    title    = filepath.stem or None
-
-    tmp = Path(tempfile.mktemp(suffix=suffix))
-    tmp.write_bytes(contents)
-
-    opts = EnhancementOptions(
-        normalize=enhance_normalize,
-        denoise  =enhance_denoise,
-        isolate  =enhance_isolate,
-        separate =enhance_separate,
-        upsample =enhance_upsample,
-    )
-    pipeline = AudioPipeline() if opts.any_active else None
-
-    async def event_stream():
-        try:
-            if source == "pdf":
-                # Vision-first: try multimodal approach if model supports it
-                model = _settings.get("ollama_model", "")
-                vision_override = _settings.get("ollama_vision_override", "false") == "true" or None
-                if model and await _ollama_client().supports_vision(model, override=vision_override):
-                    async for sse_line in _pdf_vision_summarize_sse(tmp, mode, None, title=title):
-                        yield sse_line
-                    return
-                # Fall back to text extraction
-                extractor = PDFExtractor()
-            elif source == "audio":
-                if suffix in _VIDEO_EXTENSIONS:
-                    extractor = VideoExtractor(engine=_engine, pipeline=pipeline, options=opts)
-                else:
-                    extractor = AudioExtractor(engine=_engine, pipeline=pipeline, options=opts)
-            else:
-                yield f"data: {json.dumps({'error': f'Unknown source type: {source}'})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
-            async for sse_line in _extract_and_summarize_sse(extractor, tmp, mode, None, title=title):
-                yield sse_line
-        finally:
-            tmp.unlink(missing_ok=True)
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
-
-
-# ── Summarize from URL (YouTube / webpage) ─────────────────────────────────
-
-class SummarizeUrlRequest(BaseModel):
-    source: str             # "youtube" | "url"
-    url: str
-    mode: str = "summary"
-    model: str | None = None
-    prefer_captions: bool = True   # YouTube: try captions first
-
-
-@app.post("/api/summarize/url")
-async def summarize_url(req: SummarizeUrlRequest, _: bool = Depends(verify_auth)):
-    """
-    Fetch a URL and stream an AI summary via SSE.
-
-    source="youtube" — yt-dlp captions (fast) or audio download → Whisper → LLM
-    source="url"     — Playwright page fetch → readability → LLM
-    """
-    from extractors.youtube import YouTubeExtractor, get_video_info
-    from extractors.webpage import WebpageExtractor
-
-    async def event_stream():
-        title: str | None = None
-        description: str | None = None
-        if req.source == "youtube":
-            yield f"data: {json.dumps({'phase': 'extracting', 'detail': 'Fetching video info…'})}\n\n"
-            cookies = _settings.get("youtube_cookies") or None
-            try:
-                info  = await asyncio.to_thread(get_video_info, req.url, cookies)
-                title = info.get("title") or None
-                description = info.get("description") or None
-                yield f"data: {json.dumps({'phase': 'extracting', 'detail': f'Found: {title[:60]}…' if title and len(title) > 60 else f'Found: {title}'})}\n\n"
-            except Exception:
-                yield f"data: {json.dumps({'phase': 'extracting', 'detail': 'Could not fetch video info — continuing…'})}\n\n"
-            extractor  = YouTubeExtractor(engine=_engine, prefer_captions=req.prefer_captions, cookies=cookies)
-            source_arg = req.url
-        elif req.source == "url":
-            extractor  = WebpageExtractor()
-            source_arg = req.url
-        else:
-            yield f"data: {json.dumps({'error': f'Unknown source type: {req.source}'})}\n\n"
-            yield "data: [DONE]\n\n"
-            return
-
-        async for sse_line in _extract_and_summarize_sse(
-            extractor, source_arg, req.mode, req.model, title=title, description=description
-        ):
-            yield sse_line
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
-
-
-# ── Summarize from image (vision LLM) ─────────────────────────────────────
-
-_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-
-
-async def _llm_summarize_image_sse(b64: str, mode: str, model_override: str | None):
-    """
-    Async generator — yields SSE lines for an image summarization run.
-    Passes the base64-encoded image to the LLM alongside the mode's prompt.
-    """
-    model = model_override or _settings.get("ollama_model", "")
-    if not model:
-        yield f'data: {json.dumps({"error": "No Ollama model configured — go to Settings → Ollama to select one."})}\n\n'
-        yield "data: [DONE]\n\n"
-        return
-
-    prompt_data = get_prompt(mode)
-    # Substitute {content} with a generic stand-in so existing templates work for images.
-    prompt   = prompt_data["template"].format(content="the provided image")
-    system   = prompt_data["system"]
-    thinking = _settings.get("ollama_thinking_enabled", "true") == "true"
-    budget   = int(_settings.get("ollama_token_budget", "280"))
-    ctx_size = int(_settings.get("ollama_context_size", "32768"))
-
-    try:
-        async for chunk in _ollama_client().generate_stream(
-            prompt, model, system,
-            images=[b64],
-            thinking_enabled=thinking,
-            token_budget=budget,
-            num_ctx=ctx_size,
-        ):
-            yield f"data: {json.dumps({'text': chunk})}\n\n"
-    except Exception as exc:
-        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-
-    yield "data: [DONE]\n\n"
-
-
-@app.post("/api/summarize/image")
-async def summarize_image(
-    mode: str        = Form("summary"),
-    file: UploadFile = File(...),
-    _:   bool        = Depends(verify_auth),
-):
-    """
-    Upload an image and stream a vision-LLM summary via SSE.
-
-    Requires a vision-capable model (e.g. llava, gemma3, moondream) selected
-    in Settings → Ollama. Text-only models will return an error.
-    """
-    from extractors.image import ImageExtractor
-
-    contents = await file.read()
-    suffix   = Path(file.filename or "image").suffix.lower()
-
-    if suffix not in _IMAGE_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported image type: {suffix}. Allowed: jpg, jpeg, png, webp, gif",
-        )
-
-    tmp = Path(tempfile.mktemp(suffix=suffix))
-    tmp.write_bytes(contents)
-
-    async def event_stream():
-        try:
-            extractor = ImageExtractor()
-            b64 = extractor.extract(tmp)
-            async for sse_line in _llm_summarize_image_sse(b64, mode, None):
-                yield sse_line
-        except ValueError as exc:
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-            yield "data: [DONE]\n\n"
-        finally:
-            tmp.unlink(missing_ok=True)
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
-
-
-# ── Recipe JSON-LD Export ─────────────────────────────────────────────────
-
-from typing import Optional
-from pydantic import Field
-
-
-class HowToStep(BaseModel):
-    type: str = Field(default="HowToStep", alias="@type")
-    text: str
-
-    class Config:
-        populate_by_name = True
-
-
-class RecipeJsonLD(BaseModel):
-    context: str = Field(default="https://schema.org", alias="@context")
-    type: str = Field(default="Recipe", alias="@type")
-    name: str
-    description: Optional[str] = ""
-    prepTime: Optional[str] = None
-    cookTime: Optional[str] = None
-    totalTime: Optional[str] = None
-    recipeYield: Optional[str] = None
-    recipeIngredient: list[str] = []
-    recipeInstructions: list[HowToStep] = []
-
-    class Config:
-        populate_by_name = True
-
-
-class RecipeJsonLDRequest(BaseModel):
-    recipe_markdown: str
-
-
-def _extract_json(text: str) -> str:
-    """Extract JSON from LLM response, handling markdown code blocks."""
-    import re
-    match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
-    if match:
-        return match.group(1).strip()
-    start = text.find('{')
-    end = text.rfind('}') + 1
-    if start != -1 and end > start:
-        return text[start:end]
-    return text.strip()
-
-
-@app.post("/api/recipe/jsonld")
-async def convert_recipe_to_jsonld(req: RecipeJsonLDRequest, _: bool = Depends(verify_auth)):
-    """
-    Convert recipe markdown to schema.org/Recipe JSON-LD format.
-    Uses LLM to parse the markdown and returns validated JSON.
-    """
-    model = _settings.get("ollama_model", "")
-    if not model:
-        raise HTTPException(status_code=400, detail="No Ollama model configured")
-
-    prompt = RECIPE_JSONLD_PROMPT["template"].format(content=req.recipe_markdown)
-    system = RECIPE_JSONLD_PROMPT["system"]
-
-    client = _ollama_client()
-    try:
-        raw_response = await client.generate(
-            prompt=prompt,
-            model=model,
-            system=system,
-            thinking_enabled=False,
-        )
-
-        json_str = _extract_json(raw_response)
-        data = json.loads(json_str)
-
-        validated = RecipeJsonLD(**data)
-        return validated.model_dump(by_alias=True)
-
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=422, detail="LLM did not return valid JSON")
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid recipe structure: {exc}")
-
-
-# ── Transcription ──────────────────────────────────────────────────────────
 def _run_transcription(
     job_id: str,
     audio_path: Path,

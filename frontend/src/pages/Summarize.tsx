@@ -1,28 +1,34 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
 import {
-  ArrowLeft, Sparkles, Copy, Download, RotateCcw,
+  ArrowLeft, Sparkles, Copy, Download, RotateCcw, Square,
   Mic, Youtube, Globe, FileText, File as FileIcon, Image as ImageIcon,
-  AlertTriangle, Upload, X, Code, MessageSquare, Send, Trash2, Languages,
-  Volume2, Loader, FileJson,
+  AlertTriangle, X, Code, Volume2, Loader, FileJson,
 } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import * as api from '../api/client';
+import type { StreamHandlers } from '../api/client';
 import { useJobs } from '../context/JobContext';
-import type { AudioModelMap, ChatMessage, EnhancementOptions } from '../types';
+import type { AudioModelMap, EnhancementOptions, PersistentJob } from '../types';
 import EnhancementPanel, { DEFAULT_ENHANCEMENT } from '../components/EnhancementPanel';
-import MindMapDiagram from '../components/MindMapDiagram';
+import DropZone from '../components/summarize/DropZone';
+import ChatPanel from '../components/summarize/ChatPanel';
+import TranslatePanel from '../components/summarize/TranslatePanel';
+import ResultView from '../components/results/ResultView';
+import '../components/results/renderers';
+import {
+  BUILTIN_OUTPUT_TYPES, outputBehavior, parseJson, type DownloadFormat,
+} from '../components/results/registry';
 import { useSourceCache } from '../context/SourceCache';
+import { useBatchedText } from '../hooks/useBatchedText';
 import './Summarize.css';
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// ── Types & constants ──────────────────────────────────────────────────────
 
 type SourceTab = 'text' | 'audio' | 'youtube' | 'url' | 'pdf' | 'image';
 type ViewState = 'idle' | 'extracting' | 'transcribing' | 'thinking' | 'streaming' | 'done' | 'error';
 
-// gemma4 thinking block delimiters
-const THINK_START = '<|channel>';
-const THINK_END   = '<channel|>';
+interface ModeOption { id: string; label: string; hint: string; outputType: string }
+interface CachedResult { result: string; reasoning: string; outputType: string }
 
 const SOURCE_TABS: { id: SourceTab; label: string; icon: React.ElementType }[] = [
   { id: 'text',    label: 'Text',    icon: FileText   },
@@ -33,11 +39,12 @@ const SOURCE_TABS: { id: SourceTab; label: string; icon: React.ElementType }[] =
   { id: 'image',   label: 'Image',   icon: ImageIcon  },
 ];
 
-const TRANSCRIPT_MODE = { id: 'transcript', label: 'Transcript / Raw Text', hint: 'Raw transcription — no AI processing' };
+const TRANSCRIPT_MODE: ModeOption = {
+  id: 'transcript', label: 'Transcript / Raw Text', hint: 'Raw transcription — no AI processing', outputType: 'markdown',
+};
 
-// Static fallback modes (used before prompts load from API)
-// Ordered: most common → most job-specific
-const DEFAULT_modes: { id: string; label: string; hint: string }[] = [
+// Ordered most common → most specific. Labels are replaced by /api/prompts once loaded.
+const DEFAULT_MODES: ModeOption[] = [
   { id: 'summary',         label: 'Summary',         hint: 'Prose overview — includes list items when detected' },
   { id: 'tldr',            label: 'TL;DR',           hint: 'Ultra-brief bullet summary (250 words max)' },
   { id: 'key_points',      label: 'Key Points',      hint: 'Numbered list of main ideas' },
@@ -45,255 +52,124 @@ const DEFAULT_modes: { id: string; label: string; hint: string }[] = [
   { id: 'q_and_a',         label: 'Q&A',             hint: 'Questions and answers' },
   { id: 'mind_map',        label: 'Mind Map',        hint: 'Hierarchical outline' },
   { id: 'meeting_minutes', label: 'Meeting Minutes', hint: 'Structured notes from a meeting' },
-  { id: 'extract_list',    label: 'Extract List',    hint: 'Pull out ranked or top-X lists' },
+  { id: 'extract_list',    label: 'Extract List',    hint: 'Pull out ranked or top-X lists, with timestamps' },
   { id: 'recipe',          label: 'Recipe',          hint: 'Extract recipe with ingredients and steps' },
-  TRANSCRIPT_MODE,
-];
+  { id: 'mtg_precon',      label: 'MTG Precon Upgrade', hint: 'Cards to add and cut from a Commander precon upgrade video' },
+].map(m => ({ ...m, outputType: BUILTIN_OUTPUT_TYPES[m.id] ?? 'markdown' }));
 
-// Audio/video extensions the Audio tab accepts
 const AUDIO_ACCEPT = '.mp3,.wav,.m4a,.flac,.ogg,.webm,.opus,.aac,.wma,.mp4,.mkv,.avi,.mov,.wmv,.flv,.m4v';
+const PENDING_JOB_KEY = 'lumina-summarize-pending-job';
+const JOB_POLL_MS = 1000;
 
-// ── DropZone sub-component ─────────────────────────────────────────────────
+const meta = (job: PersistentJob) => (job.result_meta ?? {}) as Record<string, unknown>;
 
-interface DropZoneProps {
-  accept: string;
-  file: File | null;
-  onFile: (f: File | null) => void;
-  label: string;
-  hint: string;
-  icon: React.ElementType;
-  disabled?: boolean;
-  maxSizeMb?: number;
-  onSizeError?: (msg: string) => void;
+function downloadBlob(content: string, filename: string, type: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
-function DropZone({ accept, file, onFile, label, hint, icon: Icon, disabled, maxSizeMb, onSizeError }: DropZoneProps) {
-  const [dragging, setDragging] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const validateAndSetFile = (f: File) => {
-    if (maxSizeMb && f.size > maxSizeMb * 1024 * 1024) {
-      const sizeMb = (f.size / (1024 * 1024)).toFixed(1);
-      onSizeError?.(`File too large (${sizeMb} MB). Maximum allowed: ${maxSizeMb} MB`);
-      return;
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // Fallback for plain-HTTP LAN access, where the Clipboard API is unavailable.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
     }
-    onFile(f);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    if (disabled) return;
-    const f = e.dataTransfer.files[0];
-    if (f) validateAndSetFile(f);
-  };
-
-  const classes = [
-    'summarize-dropzone',
-    dragging  ? 'dragging'  : '',
-    disabled  ? 'disabled'  : '',
-    file      ? 'has-file'  : '',
-  ].filter(Boolean).join(' ');
-
-  return (
-    <div
-      className={classes}
-      onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragging(true); }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={handleDrop}
-      onClick={() => { if (!disabled && !file) inputRef.current?.click(); }}
-      role="button"
-      tabIndex={disabled ? -1 : 0}
-      onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !disabled && !file) inputRef.current?.click(); }}
-      aria-label={file ? `Selected file: ${file.name}` : label}
-    >
-      <input
-        ref={inputRef}
-        type="file"
-        accept={accept}
-        style={{ display: 'none' }}
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) validateAndSetFile(f); e.target.value = ''; }}
-        disabled={disabled}
-      />
-
-      {file ? (
-        <div className="summarize-dropzone-file">
-          <Icon size={16} aria-hidden="true" />
-          <span className="summarize-dropzone-name">{file.name}</span>
-          <span className="summarize-dropzone-size">
-            {(file.size / (1024 * 1024)).toFixed(1)} MB
-          </span>
-          {!disabled && (
-            <button
-              className="summarize-dropzone-remove"
-              onClick={(e) => { e.stopPropagation(); onFile(null); }}
-              aria-label="Remove file"
-            >
-              <X size={13} />
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="summarize-dropzone-empty">
-          <Upload size={22} className="summarize-dropzone-icon" aria-hidden="true" />
-          <span className="summarize-dropzone-label">{label}</span>
-          <span className="summarize-dropzone-hint">{hint}</span>
-        </div>
-      )}
-    </div>
-  );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-// ── Main component ─────────────────────────────────────────────────────────
+// ── Page ───────────────────────────────────────────────────────────────────
 
 export default function Summarize() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { submitJob, jobs } = useJobs();
+  const { submitJob, cancelJob } = useJobs();
   const sourceCache = useSourceCache();
 
-  // Pending job tracking for async sources (YouTube, URL)
-  const [pendingJobId, setPendingJobId] = useState<string | null>(null);
-
-  // ── Common state ──────────────────────────────────────────────────────────
   const validTabs = SOURCE_TABS.map(t => t.id) as string[];
   const initialTab = searchParams.get('tab');
   const [sourceTab, setSourceTab] = useState<SourceTab>(
-    (initialTab && validTabs.includes(initialTab) ? initialTab : 'text') as SourceTab
+    (initialTab && validTabs.includes(initialTab) ? initialTab : 'text') as SourceTab,
   );
-  const [mode,      setMode]      = useState<string>('summary');
-  const [modes,     setModes]     = useState(DEFAULT_modes);
-  const [view,      setView]      = useState<ViewState>('idle');
-  const [result,    setResult]    = useState('');
-  const [errorMsg,  setErrorMsg]  = useState('');
-  const [warningMsg, setWarningMsg] = useState('');
+  const [mode, setMode]   = useState('summary');
+  const [modes, setModes] = useState<ModeOption[]>([...DEFAULT_MODES, TRANSCRIPT_MODE]);
+  const [view, setView]   = useState<ViewState>('idle');
+  const [result, resultBuf]       = useBatchedText();
+  const [reasoning, reasoningBuf] = useBatchedText();
+  const [resultMode, setResultMode] = useState('');           // mode whose result is on screen
+  const [outputType, setOutputType] = useState('markdown');
+  const [errorMsg, setErrorMsg]     = useState('');
+  const [warnings, setWarnings]     = useState<string[]>([]);
   const [statusDetail, setStatusDetail] = useState('');
-  const [isCopied,       setIsCopied]       = useState(false);
-  const [reasoning,      setReasoning]      = useState('');
-  const [renderMarkdown, setRenderMarkdown] = useState(false);
+  const [isCopied, setIsCopied]     = useState(false);
+  const [rendered, setRendered]     = useState(true);
+  const [modeCache, setModeCache]   = useState<Record<string, CachedResult>>({});
 
-  // Per-mode result cache: clicking a completed mode navigates to its output
-  type ModeCache = Record<string, { result: string; reasoning: string }>;
-  const [modeCache, setModeCache] = useState<ModeCache>({});
+  const abortRef = useRef<AbortController | null>(null);
+  const [pendingJobId, setPendingJobIdState] = useState<string | null>(() => {
+    try { return sessionStorage.getItem(PENDING_JOB_KEY); } catch { return null; }
+  });
+  const setPendingJobId = (id: string | null) => {
+    setPendingJobIdState(id);
+    try {
+      if (id) sessionStorage.setItem(PENDING_JOB_KEY, id);
+      else sessionStorage.removeItem(PENDING_JOB_KEY);
+    } catch { /* storage unavailable */ }
+  };
 
-  // Accumulator refs so we can read the final result synchronously in onDone
-  const resultAccumRef    = useRef('');
-  const reasoningAccumRef = useRef('');
-  const submittedModeRef  = useRef('');
-  const submittedSourceRef = useRef('');
-
-  // ── Source-specific state ─────────────────────────────────────────────────
-  const [content,        setContent]        = useState('');          // text tab
-  const [audioFile,      setAudioFile]      = useState<File | null>(null);
-  const [pdfFile,        setPdfFile]        = useState<File | null>(null);
-  const [imageFile,      setImageFile]      = useState<File | null>(null);
-  const [youtubeUrl,     setYoutubeUrl]     = useState('');
-  const [urlInput,       setUrlInput]       = useState('');
+  // Source inputs
+  const [content, setContent]               = useState('');
+  const [audioFile, setAudioFile]           = useState<File | null>(null);
+  const [pdfFile, setPdfFile]               = useState<File | null>(null);
+  const [imageFile, setImageFile]           = useState<File | null>(null);
+  const [youtubeUrl, setYoutubeUrl]         = useState('');
+  const [urlInput, setUrlInput]             = useState('');
   const [preferCaptions, setPreferCaptions] = useState(true);
-  const [enhancement,    setEnhancement]    = useState<EnhancementOptions>(DEFAULT_ENHANCEMENT);
-  const [audioModels,    setAudioModels]    = useState<AudioModelMap | undefined>(undefined);
-  const [ttsEnabled,     setTtsEnabled]     = useState(true);
-  const [ttsVoice,       setTtsVoice]       = useState<string | undefined>(undefined);
+  const [enhancement, setEnhancement]       = useState<EnhancementOptions>(DEFAULT_ENHANCEMENT);
+  const [audioModels, setAudioModels]       = useState<AudioModelMap | undefined>(undefined);
   const [maxUploadSizeMb, setMaxUploadSizeMb] = useState(500);
 
-  // Persistent TTS audio player — lifted here so it survives mode/tab switches
-  const [ttsAudioUrl,    setTtsAudioUrl]    = useState<string | null>(null);
-  const [ttsLoading,     setTtsLoading]     = useState(false);
-  const [ttsLoadSrc,     setTtsLoadSrc]     = useState<'result' | 'translation' | null>(null);
-  const [ttsError,       setTtsError]       = useState('');
+  // Chat source
+  const [sourceContent, setSourceContent] = useState('');
+  const [sourceUrl, setSourceUrl]         = useState<string | undefined>(undefined);
+
+  // TTS
+  const [ttsEnabled, setTtsEnabled]   = useState(true);
+  const [ttsVoice, setTtsVoice]       = useState<string | undefined>(undefined);
+  const [ttsAudioUrl, setTtsAudioUrl] = useState<string | null>(null);
+  const [ttsLoading, setTtsLoading]   = useState(false);
+  const [ttsError, setTtsError]       = useState('');
   const ttsBlobUrlRef = useRef<string | null>(null);
 
-  // Revoke audio blob URL on unmount
-  useEffect(() => {
-    return () => { if (ttsBlobUrlRef.current) URL.revokeObjectURL(ttsBlobUrlRef.current); };
+  // Recipe
+  const [recipeFormat, setRecipeFormat]   = useState<'markdown' | 'jsonld'>('jsonld');
+  const [jsonLdLoading, setJsonLdLoading] = useState(false);
+  const [jsonLdError, setJsonLdError]     = useState('');
+  const [jsonLdCopied, setJsonLdCopied]   = useState(false);
+
+  const behavior = outputBehavior(outputType);
+  const isRunning = ['extracting', 'transcribing', 'thinking', 'streaming'].includes(view);
+  const modeLabel = (id: string) => modes.find(m => m.id === id)?.label ?? id;
+
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    if (ttsBlobUrlRef.current) URL.revokeObjectURL(ttsBlobUrlRef.current);
   }, []);
 
-  // ── Translation state ─────────────────────────────────────────────────────
-  const [translateLang,   setTranslateLang]   = useState('Spanish');
-  const [translation,     setTranslation]     = useState('');
-  const [translateState,  setTranslateState]  = useState<'idle' | 'streaming' | 'done' | 'error'>('idle');
-  const [translateError,  setTranslateError]  = useState('');
-  const translateAccumRef = useRef('');
-
-  // ── Recipe format state ────────────────────────────────────────────────────
-  const [recipeFormat,  setRecipeFormat]  = useState<'markdown' | 'jsonld'>('jsonld');
-  const [jsonLdLoading, setJsonLdLoading] = useState(false);
-  const [jsonLdError,   setJsonLdError]   = useState('');
-  const [jsonLdCopied,  setJsonLdCopied]  = useState(false);
-
-  // ── Chat state ────────────────────────────────────────────────────────────
-  // sourceContent holds the full text available for chat (set after submit)
-  const [sourceContent,    setSourceContent]    = useState('');
-  const [isChatOpen,       setIsChatOpen]       = useState(false);
-  const [chatMessages,     setChatMessages]     = useState<ChatMessage[]>([]);
-  const [chatInput,        setChatInput]        = useState('');
-  const [isChatStreaming,  setIsChatStreaming]  = useState(false);
-  const [chatNotices,      setChatNotices]      = useState<string[]>([]);
-  const chatEndRef    = useRef<HTMLDivElement>(null);
-  const chatAccumRef  = useRef('');
-
-  // Auto-scroll chat to bottom when messages change
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
-
-  // ── Thinking-block parser refs ────────────────────────────────────────────
-  const rawBufferRef  = useRef('');
-  const thinkDoneRef  = useRef(false);
-
-  // Load job data if jobId is in URL (from "Open in Summarize" button)
-  useEffect(() => {
-    const jobId = searchParams.get('jobId');
-    if (!jobId) return;
-
-    api.getJob(jobId).then(job => {
-      if (!job || job.status !== 'done' || !job.result) return;
-
-      // Set the appropriate source tab based on job source_type
-      if (job.source_type === 'youtube') {
-        setSourceTab('youtube');
-        setYoutubeUrl(job.source_ref || '');
-      } else if (job.source_type === 'url') {
-        setSourceTab('url');
-        setUrlInput(job.source_ref || '');
-      }
-
-      if (job.type === 'extract') {
-        // For extract jobs: result IS the extracted text, no summary yet
-        setSourceContent(job.result);
-        setModeCache({ transcript: { result: job.result, reasoning: '' } });
-        setMode('summary');
-        setView('idle');
-      } else {
-        // For summarize jobs: load result and extracted_text
-        const jobMode = (job.config as Record<string, unknown>)?.mode as string || 'summary';
-        const extractedText = (job.result_meta as Record<string, unknown>)?.extracted_text as string | undefined;
-
-        setMode(jobMode);
-        setResult(job.result);
-        resultAccumRef.current = job.result;
-        submittedModeRef.current = jobMode;
-        setView('done');
-        setRenderMarkdown(jobMode !== 'recipe_jsonld');
-
-        // Cache the mode result
-        setModeCache(prev => ({
-          ...prev,
-          [jobMode]: { result: job.result!, reasoning: '' },
-        }));
-
-        // Set source content for chat if extracted text is available
-        if (extractedText) {
-          setSourceContent(extractedText);
-          setModeCache(prev => ({ ...prev, transcript: { result: extractedText, reasoning: '' } }));
-        }
-      }
-
-      // Clear the jobId from URL to avoid reloading on refresh
-      setSearchParams({}, { replace: true });
-    }).catch(() => {});
-  }, [searchParams, setSearchParams]);
-
-  // Load audio model status, TTS settings, and prompt modes on mount
+  // ── Load settings & modes ──────────────────────────────────────────────
   useEffect(() => {
     api.getAudioModels().then(setAudioModels).catch(() => {});
     api.getSettings().then(s => {
@@ -303,207 +179,163 @@ export default function Summarize() {
       if (!isNaN(maxSize) && maxSize > 0) setMaxUploadSizeMb(maxSize);
     }).catch(() => {});
     api.getPrompts().then(prompts => {
-      // Deduplicate by mode: custom prompts shadow built-ins for the same mode slug
-      const seen = new Map<string, { id: string; label: string; hint: string }>();
-      const hintMap = Object.fromEntries(DEFAULT_modes.map(m => [m.id, m.hint]));
-      // Process defaults first, then custom (custom overwrites defaults in the map)
-      const sorted = [...prompts].sort((a, b) => Number(b.is_default) - Number(a.is_default));
-      for (const p of sorted) {
-        seen.set(p.mode, { id: p.mode, label: p.name, hint: hintMap[p.mode] ?? '' });
-      }
-      if (seen.size > 0) {
-        // Sort by DEFAULT_modes order, then append any custom modes not in the list
-        const orderMap = new Map(DEFAULT_modes.map((m, i) => [m.id, i]));
-        const modeList = [...seen.values()].sort((a, b) => {
-          const aIdx = orderMap.get(a.id) ?? 999;
-          const bIdx = orderMap.get(b.id) ?? 999;
-          return aIdx - bIdx;
+      const hints = Object.fromEntries(DEFAULT_MODES.map(m => [m.id, m.hint]));
+      const order = new Map(DEFAULT_MODES.map((m, i) => [m.id, i]));
+      // Custom prompts shadow built-ins with the same mode slug.
+      const byMode = new Map<string, ModeOption>();
+      for (const p of [...prompts].sort((a, b) => Number(b.is_default) - Number(a.is_default))) {
+        byMode.set(p.mode, {
+          id: p.mode, label: p.name, hint: hints[p.mode] ?? '',
+          outputType: p.output_type ?? BUILTIN_OUTPUT_TYPES[p.mode] ?? 'markdown',
         });
-        setModes([...modeList, TRANSCRIPT_MODE]);
+      }
+      if (byMode.size > 0) {
+        const list = [...byMode.values()].sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
+        setModes([...list, TRANSCRIPT_MODE]);
       }
     }).catch(() => {});
   }, []);
 
-  // Watch for pending job completion and load result inline
+  // ── Result lifecycle ───────────────────────────────────────────────────
+
+  const clearRun = () => {
+    resultBuf.set('');
+    reasoningBuf.set('');
+    setErrorMsg('');
+    setWarnings([]);
+    setStatusDetail('');
+    setJsonLdError('');
+  };
+
+  const addWarning = (msg: string) => setWarnings(prev => (prev.includes(msg) ? prev : [...prev, msg]));
+
+  /** Show a finished result and remember it for this mode. */
+  const showResult = useCallback((forMode: string, text: string, why: string, type: string) => {
+    resultBuf.set(text);
+    reasoningBuf.set(why);
+    setResultMode(forMode);
+    setOutputType(type);
+    setRendered(true);
+    setView('done');
+    setModeCache(prev => ({ ...prev, [forMode]: { result: text, reasoning: why, outputType: type } }));
+  }, [resultBuf, reasoningBuf]);
+
+  const loadSourceFromJob = useCallback((job: PersistentJob) => {
+    const extracted = meta(job).extracted_text as string | undefined;
+    if (extracted) {
+      setSourceContent(extracted);
+      setModeCache(prev => ({ ...prev, transcript: { result: extracted, reasoning: '', outputType: 'markdown' } }));
+    }
+    if (job.source_type === 'youtube') setSourceUrl(job.source_ref ?? undefined);
+  }, []);
+
+  const showJobResult = useCallback((job: PersistentJob) => {
+    const m = meta(job);
+    const jobMode = (job.config as Record<string, unknown>)?.mode as string || 'summary';
+    const type = (m.output_type as string) || BUILTIN_OUTPUT_TYPES[jobMode] || 'markdown';
+    setMode(jobMode);
+    showResult(jobMode, job.result ?? '', (m.reasoning as string) || '', type);
+    const jobWarnings = (m.warnings as string[] | undefined) ?? [];
+    setWarnings(jobWarnings);
+    loadSourceFromJob(job);
+  }, [showResult, loadSourceFromJob]);
+
+  // Open a finished job from the Jobs page (?jobId=…)
+  useEffect(() => {
+    const jobId = searchParams.get('jobId');
+    if (!jobId) return;
+    api.getJob(jobId).then(job => {
+      if (!job || job.status !== 'done' || !job.result) return;
+      if (job.source_type === 'youtube') { setSourceTab('youtube'); setYoutubeUrl(job.source_ref || ''); }
+      else if (job.source_type === 'url') { setSourceTab('url'); setUrlInput(job.source_ref || ''); }
+
+      if (job.type === 'extract') {
+        setSourceContent(job.result);
+        setModeCache({ transcript: { result: job.result, reasoning: '', outputType: 'markdown' } });
+        setMode('summary');
+        setView('idle');
+      } else {
+        showJobResult(job);
+      }
+      setSearchParams({}, { replace: true });
+    }).catch(() => {});
+  }, [searchParams, setSearchParams, showJobResult]);
+
+  // Follow a queued job (YouTube / URL): stream its partial result, then show it.
   useEffect(() => {
     if (!pendingJobId) return;
-    const job = jobs.find(j => j.id === pendingJobId);
-    if (!job) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
 
-    // Update status detail while running
-    if (job.status === 'running' && job.status_detail) {
-      setStatusDetail(job.status_detail);
-    }
-
-    // Handle completion
-    if (job.status === 'done' && job.result) {
-      const jobMode = (job.config as Record<string, unknown>)?.mode as string || 'summary';
-      const extractedText = (job.result_meta as Record<string, unknown>)?.extracted_text as string | undefined;
-
-      // Populate result
-      setResult(job.result);
-      resultAccumRef.current = job.result;
-      submittedModeRef.current = jobMode;
-      setView('done');
-      setRenderMarkdown(jobMode !== 'recipe_jsonld');
-
-      // Cache the mode result
-      setModeCache(prev => ({
-        ...prev,
-        [jobMode]: { result: job.result!, reasoning: '' },
-      }));
-
-      // Set source content for chat if extracted text is available
-      if (extractedText) {
-        setSourceContent(extractedText);
-        setModeCache(prev => ({ ...prev, transcript: { result: extractedText, reasoning: '' } }));
+    const tick = async () => {
+      let job: PersistentJob;
+      try {
+        job = await api.getJob(pendingJobId);
+      } catch {
+        if (!stopped) timer = setTimeout(tick, JOB_POLL_MS * 3);
+        return;
       }
+      if (stopped) return;
 
-      // Save to history
-      const sourceDetail = job.source_ref || '';
-      api.saveHistory({
-        mode: jobMode,
-        source: job.source_type || 'url',
-        source_detail: sourceDetail,
-        result: job.result,
-        reasoning: '',
-      }).catch(() => {});
+      if (job.status === 'done') {
+        showJobResult(job);
+        setPendingJobId(null);
+        return;
+      }
+      if (job.status === 'error' || job.status === 'cancelled') {
+        setErrorMsg(job.status === 'cancelled' ? 'Job was cancelled' : (job.error || 'Job failed'));
+        setView('error');
+        setPendingJobId(null);
+        return;
+      }
+      if (job.status_detail) setStatusDetail(job.status_detail);
+      const jobMode = (job.config as Record<string, unknown>)?.mode as string;
+      const streams = outputBehavior(BUILTIN_OUTPUT_TYPES[jobMode]).streamText;
+      if (job.status === 'running' && job.result && streams) {
+        resultBuf.set(job.result);
+        setView('streaming');
+      } else {
+        setView(v => (v === 'idle' || v === 'done' ? 'extracting' : v));
+      }
+      timer = setTimeout(tick, JOB_POLL_MS);
+    };
 
-      setPendingJobId(null);
-    }
+    if (view === 'idle') setView('extracting');
+    tick();
+    return () => { stopped = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingJobId]);
 
-    // Handle error
-    if (job.status === 'error') {
-      setErrorMsg(job.error || 'Job failed');
-      setView('error');
-      setPendingJobId(null);
-    }
-
-    // Handle cancelled
-    if (job.status === 'cancelled') {
-      setErrorMsg('Job was cancelled');
-      setView('error');
-      setPendingJobId(null);
-    }
-  }, [jobs, pendingJobId]);
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Actions ────────────────────────────────────────────────────────────
 
   const reset = () => {
+    abortRef.current?.abort();
+    clearRun();
     setView('idle');
-    setResult('');
-    setErrorMsg('');
-    setStatusDetail('');
-    setReasoning('');
+    setResultMode('');
     setModeCache({});
     setSourceContent('');
-    setChatMessages([]);
-    setChatNotices([]);
-    setChatInput('');
+    setSourceUrl(undefined);
     setImageFile(null);
-    setTranslation('');
-    setTranslateState('idle');
     setPendingJobId(null);
     if (ttsBlobUrlRef.current) { URL.revokeObjectURL(ttsBlobUrlRef.current); ttsBlobUrlRef.current = null; }
     setTtsAudioUrl(null);
-    rawBufferRef.current      = '';
-    thinkDoneRef.current      = false;
-    resultAccumRef.current    = '';
-    reasoningAccumRef.current = '';
-    setJsonLdError('');
   };
 
-  // ── Recipe JSON-LD handlers ────────────────────────────────────────────────
-
-  const generateJsonLD = async () => {
-    if (!result || submittedModeRef.current !== 'recipe') return;
-    setJsonLdLoading(true);
-    setJsonLdError('');
-    try {
-      const data = await api.convertRecipeToJsonLD(result);
-      // Store in modeCache so it persists
-      setModeCache(prev => ({
-        ...prev,
-        recipe_jsonld: { result: JSON.stringify(data, null, 2), reasoning: '' },
-      }));
-    } catch (err) {
-      setJsonLdError(err instanceof Error ? err.message : 'Failed to generate JSON-LD');
-    } finally {
-      setJsonLdLoading(false);
+  const stop = () => {
+    abortRef.current?.abort();
+    if (pendingJobId) {
+      cancelJob(pendingJobId).catch(() => {});
+      setPendingJobId(null);
+    }
+    const partial = resultBuf.current();
+    if (partial) {
+      setView('done');
+      addWarning('Stopped — the result is incomplete.');
+    } else {
+      setView('idle');
     }
   };
-
-  const copyJsonLD = async () => {
-    const isDirectJsonLd = submittedModeRef.current === 'recipe_jsonld';
-    const jsonResult = modeCache.recipe_jsonld?.result || (isDirectJsonLd ? result : null);
-    if (!jsonResult) return;
-    try {
-      await navigator.clipboard.writeText(jsonResult);
-      setJsonLdCopied(true);
-      setTimeout(() => setJsonLdCopied(false), 2000);
-    } catch {
-      /* clipboard denied */
-    }
-  };
-
-  const downloadJsonLD = () => {
-    const isDirectJsonLd = submittedModeRef.current === 'recipe_jsonld';
-    const jsonResult = modeCache.recipe_jsonld?.result || (isDirectJsonLd ? result : null);
-    if (!jsonResult) return;
-    let filename = 'recipe.json';
-    try {
-      const parsed = JSON.parse(jsonResult);
-      if (parsed.name) {
-        filename = `${parsed.name.toLowerCase().replace(/\s+/g, '-')}.json`;
-      }
-    } catch { /* use default filename */ }
-    const blob = new Blob([jsonResult], { type: 'application/ld+json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const runTranslation = async () => {
-    if (!result) return;
-    setTranslation('');
-    setTranslateError('');
-    setTranslateState('streaming');
-    translateAccumRef.current = '';
-    await api.translateStream(
-      result,
-      translateLang,
-      chunk => {
-        translateAccumRef.current += chunk;
-        setTranslation(translateAccumRef.current);
-      },
-      () => setTranslateState('done'),
-      msg => { setTranslateError(msg); setTranslateState('error'); },
-    );
-  };
-
-  const handleReadAloud = async (text: string, src: 'result' | 'translation') => {
-    if (ttsBlobUrlRef.current) { URL.revokeObjectURL(ttsBlobUrlRef.current); ttsBlobUrlRef.current = null; }
-    setTtsAudioUrl(null);
-    setTtsLoading(true);
-    setTtsLoadSrc(src);
-    setTtsError('');
-    try {
-      const blob = await api.synthesizeSpeech(text, ttsVoice);
-      const url = URL.createObjectURL(blob);
-      ttsBlobUrlRef.current = url;
-      setTtsAudioUrl(url);
-    } catch (err) {
-      setTtsError(err instanceof Error ? err.message : 'TTS generation failed — check voice model is downloaded');
-    } finally {
-      setTtsLoading(false);
-      setTtsLoadSrc(null);
-    }
-  };
-
-  const isRunning = ['extracting', 'transcribing', 'thinking', 'streaming'].includes(view);
 
   const canSubmit = (() => {
     if (isRunning) return false;
@@ -517,380 +349,251 @@ export default function Summarize() {
     }
   })();
 
-  // ── Thinking-block parser ─────────────────────────────────────────────────
-  // gemma4 wraps its chain-of-thought in <|channel>thought\n...<channel|>.
-  // We show a "Thinking…" indicator while that block is active, then reveal
-  // the answer text that follows.
-  const processChunk = useCallback((chunk: string) => {
-    rawBufferRef.current += chunk;
-    const raw = rawBufferRef.current;
-
-    if (thinkDoneRef.current) {
-      resultAccumRef.current += chunk;
-      setResult(prev => prev + chunk);
-      return;
-    }
-
-    const startIdx = raw.indexOf(THINK_START);
-    const endIdx   = raw.indexOf(THINK_END);
-
-    if (startIdx === -1) {
-      // No thinking block — show content directly
-      thinkDoneRef.current = true;
-      resultAccumRef.current += chunk;
-      setView('streaming');
-      setResult(prev => prev + chunk);
-      return;
-    }
-
-    if (endIdx === -1) {
-      // Inside thinking block — stay in "thinking" phase
-      setView('thinking');
-      return;
-    }
-
-    // Thinking block complete — capture reasoning, extract answer after it
-    thinkDoneRef.current = true;
-    const thinkText = raw.slice(startIdx + THINK_START.length, endIdx).replace(/^thought\n/, '').trim();
-    const answer    = raw.slice(endIdx + THINK_END.length).trimStart();
-    reasoningAccumRef.current = thinkText;
-    resultAccumRef.current    = answer;
-    setReasoning(thinkText);
-    setResult(answer);
-    setView('streaming');
-  }, []);
-
-  // ── Submit ────────────────────────────────────────────────────────────────
-
   const handleSubmit = async () => {
     if (!canSubmit) return;
-
-    // Use recipe_jsonld mode when JSON-LD format is selected for recipe
     const effectiveMode = (mode === 'recipe' && recipeFormat === 'jsonld') ? 'recipe_jsonld' : mode;
+    const expectedType = modes.find(m => m.id === effectiveMode)?.outputType
+      ?? BUILTIN_OUTPUT_TYPES[effectiveMode] ?? 'markdown';
 
-    // Reset streaming state but keep modeCache (other modes' results stay)
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    clearRun();
     setView('thinking');
-    setResult('');
-    setErrorMsg('');
-    setWarningMsg('');
-    setStatusDetail('');
-    setReasoning('');
-    setJsonLdError('');
-    rawBufferRef.current       = '';
-    thinkDoneRef.current       = false;
-    resultAccumRef.current     = '';
-    reasoningAccumRef.current  = '';
-    submittedModeRef.current   = effectiveMode;
-    submittedSourceRef.current = sourceTab;
+    setResultMode(effectiveMode);
+    setOutputType(expectedType);
+    const src = sourceTab;
+    let finalType = expectedType;
 
-    const onPhase = (phase: string, detail: string) => {
-      setView(phase as ViewState);
-      setStatusDetail(detail);
-    };
-    const onChunk = (chunk: string) => processChunk(chunk);
-    const onError = (msg: string) => { setErrorMsg(msg); setView('error'); };
-    const onWarning = (msg: string) => setWarningMsg(msg);
-    const onDone  = () => {
-      setView(v => v === 'error' ? v : 'done');
-      const finalResult   = resultAccumRef.current;
-      const finalReasoning = reasoningAccumRef.current;
-      // Default to markdown rendering for non-JSON outputs
-      if (submittedModeRef.current !== 'recipe_jsonld') {
-        setRenderMarkdown(true);
-      }
-      setModeCache(prev => ({
-        ...prev,
-        [submittedModeRef.current]: {
-          result:    finalResult,
-          reasoning: finalReasoning,
-        },
-      }));
-      if (finalResult) {
-        const src = submittedSourceRef.current as SourceTab;
+    const handlers: StreamHandlers = {
+      onPhase: (phase, detail) => {
+        setView(phase === 'thinking' ? 'thinking' : (phase as ViewState));
+        setStatusDetail(detail);
+      },
+      onReasoning: chunk => {
+        reasoningBuf.append(chunk);
+        setView(v => (v === 'streaming' ? v : 'thinking'));
+        setStatusDetail('');
+      },
+      onChunk: chunk => {
+        resultBuf.append(chunk);
+        setView('streaming');
+      },
+      onReset: () => resultBuf.set(''),
+      onResult: (text, m) => {
+        resultBuf.set(text);
+        if (m.output_type) { finalType = m.output_type; setOutputType(m.output_type); }
+      },
+      onWarning: addWarning,
+      onError: msg => { setErrorMsg(msg); setView('error'); },
+      onDone: () => {
+        if (controller.signal.aborted) return;
+        const text = resultBuf.current();
+        const why = reasoningBuf.current();
+        setView(v => (v === 'error' ? v : 'done'));
+        if (!text) return;
+        showResult(effectiveMode, text, why, finalType);
         const sourceDetail =
-          src === 'youtube' ? youtubeUrl.trim() :
-          src === 'url'     ? urlInput.trim() :
-          src === 'audio'   ? (audioFile?.name ?? '') :
-          src === 'pdf'     ? (pdfFile?.name ?? '') :
-          src === 'image'   ? (imageFile?.name ?? '') :
-          '';
+          src === 'audio' ? (audioFile?.name ?? '') :
+          src === 'pdf'   ? (pdfFile?.name ?? '') :
+          src === 'image' ? (imageFile?.name ?? '') : '';
         api.saveHistory({
-          mode:          submittedModeRef.current,
-          source:        src,
-          source_detail: sourceDetail,
-          result:        finalResult,
-          reasoning:     finalReasoning,
-        }).catch(() => {/* ignore history save errors */});
-      }
+          mode: effectiveMode, source: src, source_detail: sourceDetail, result: text, reasoning: why,
+        }).catch(() => {});
+      },
     };
 
-    const onExtracted = (extracted: string, truncated: boolean = false) => {
+    const onExtracted = (key: string | null, label: string) => (extracted: string) => {
+      if (key) sourceCache.set(key, { content: extracted, label, sourceType: src });
       setSourceContent(extracted);
-      setModeCache(prev => ({ ...prev, transcript: { result: extracted, reasoning: '' } }));
-      if (truncated) {
-        setChatNotices(prev =>
-          prev.includes('Content truncated for chat (>32KB). Full content was used for summarization.')
-            ? prev
-            : [...prev, 'Content truncated for chat (>32KB). Full content was used for summarization.']
-        );
-      }
+      setModeCache(prev => ({ ...prev, transcript: { result: extracted, reasoning: '', outputType: 'markdown' } }));
     };
 
-    // Build a cache key for extractable sources (URL-based and file-based)
-    const fileCacheKey = (prefix: string, f: File) =>
-      `${prefix}:${f.name}:${f.size}:${f.lastModified}`;
-
-    // Wrap onExtracted to populate the cache after a fresh extraction
-    const withCaching = (key: string, label: string, type: string, cb: typeof onExtracted) =>
-      (extracted: string, truncated: boolean = false) => {
-        sourceCache.set(key, { content: extracted, label, sourceType: type });
-        cb(extracted, truncated);
-      };
-
-    // Try to serve from cache for sources that support it
-    const tryFromCache = async (
-      key: string,
-      fallback: () => Promise<void>,
-    ) => {
+    // Re-runs on the same file reuse the extracted text instead of re-transcribing.
+    const fileKey = (prefix: string, f: File, extra = '') => `${prefix}:${f.name}:${f.size}:${f.lastModified}${extra}`;
+    const fromCacheOr = async (key: string, fresh: () => Promise<void>) => {
       const cached = sourceCache.get(key);
-      if (cached) {
-        onPhase('extracting', 'Using cached extraction…');
-        onExtracted(cached.content);
-        await api.summarize(cached.content, effectiveMode, null, onChunk, onError, onDone, onWarning);
-      } else {
-        await fallback();
-      }
+      if (!cached) return fresh();
+      setStatusDetail('Using cached extraction…');
+      onExtracted(null, cached.label)(cached.content);
+      await api.summarize(cached.content, effectiveMode, handlers, { signal: controller.signal });
     };
 
     switch (sourceTab) {
       case 'text': {
         const trimmed = content.trim();
-        setSourceContent(trimmed);
-        setModeCache(prev => ({ ...prev, transcript: { result: trimmed, reasoning: '' } }));
-        await api.summarize(trimmed, effectiveMode, null, onChunk, onError, onDone, onWarning);
+        onExtracted(null, 'text')(trimmed);
+        await api.summarize(trimmed, effectiveMode, handlers, { signal: controller.signal });
         break;
       }
-
       case 'audio': {
-        const key = fileCacheKey('audio', audioFile!);
-        await tryFromCache(key, () =>
-          api.summarizeFile(audioFile!, 'audio', effectiveMode, onPhase, onChunk, onError, onDone, enhancement,
-            withCaching(key, audioFile!.name, 'audio', onExtracted), onWarning)
-        );
+        const key = fileKey('audio', audioFile!, `:${JSON.stringify(enhancement)}`);
+        await fromCacheOr(key, () => api.summarizeFile(audioFile!, 'audio', effectiveMode,
+          { ...handlers, onExtracted: onExtracted(key, audioFile!.name) },
+          { enhancement, signal: controller.signal }));
         break;
       }
-
       case 'pdf': {
-        const key = fileCacheKey('pdf', pdfFile!);
-        await tryFromCache(key, () =>
-          api.summarizeFile(pdfFile!, 'pdf', effectiveMode, onPhase, onChunk, onError, onDone, undefined,
-            withCaching(key, pdfFile!.name, 'pdf', onExtracted), onWarning)
-        );
+        const key = fileKey('pdf', pdfFile!);
+        await fromCacheOr(key, () => api.summarizeFile(pdfFile!, 'pdf', effectiveMode,
+          { ...handlers, onExtracted: onExtracted(key, pdfFile!.name) },
+          { signal: controller.signal }));
         break;
       }
-
-      case 'youtube': {
-        const url = youtubeUrl.trim();
-        try {
-          const job = await submitJob({
-            job_type: 'summarize',
-            source_type: 'youtube',
-            source_ref: url,
-            source_title: url,
-            config: { mode: effectiveMode, prefer_captions: preferCaptions },
-          });
-          setPendingJobId(job.id);
-          setView('extracting');
-          setStatusDetail('Queued for processing…');
-        } catch (err) {
-          onError(err instanceof Error ? err.message : 'Failed to create job');
-        }
-        return;
-      }
-
-      case 'url': {
-        const url = urlInput.trim();
-        try {
-          const job = await submitJob({
-            job_type: 'summarize',
-            source_type: 'url',
-            source_ref: url,
-            source_title: url,
-            config: { mode: effectiveMode },
-          });
-          setPendingJobId(job.id);
-          setView('extracting');
-          setStatusDetail('Queued for processing…');
-        } catch (err) {
-          onError(err instanceof Error ? err.message : 'Failed to create job');
-        }
-        return;
-      }
-
       case 'image':
-        // No onExtracted: images have no text content, chat panel stays hidden
-        await api.summarizeImage(imageFile!, effectiveMode, onChunk, onError, onDone, onWarning);
+        await api.summarizeImage(imageFile!, effectiveMode, handlers, { signal: controller.signal });
         break;
+      case 'youtube':
+      case 'url': {
+        const url = (sourceTab === 'youtube' ? youtubeUrl : urlInput).trim();
+        try {
+          const job = await submitJob({
+            job_type: 'summarize',
+            source_type: sourceTab,
+            source_ref: url,
+            source_title: url,
+            config: sourceTab === 'youtube'
+              ? { mode: effectiveMode, prefer_captions: preferCaptions }
+              : { mode: effectiveMode },
+          });
+          setView('extracting');
+          setStatusDetail('Queued for processing…');
+          setPendingJobId(job.id);
+        } catch (err) {
+          handlers.onError(err instanceof Error ? err.message : 'Failed to create job');
+        }
+        break;
+      }
     }
   };
-
-  // ── Copy / download ───────────────────────────────────────────────────────
-
-  const copyResult = async () => {
-    try {
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(result);
-      } else {
-        // Fallback for non-HTTPS (HTTP LAN access)
-        const ta = document.createElement('textarea');
-        ta.value = result;
-        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      }
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
-    } catch { /* denied */ }
-  };
-
-  const downloadSvg = () => {
-    const svg = document.querySelector('.mindmap-svg');
-    if (!svg) return;
-    const modeLabel = modes.find(m => m.id === mode)?.label ?? mode;
-    const slug = modeLabel.toLowerCase().replace(/\s+/g, '-');
-    const blob = new Blob([svg.outerHTML], { type: 'image/svg+xml' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = `${slug}.svg`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const downloadResult = (format: 'txt' | 'md' = 'txt') => {
-    const modeLabel = modes.find(m => m.id === mode)?.label ?? mode;
-    const slug      = modeLabel.toLowerCase().replace(/\s+/g, '-');
-
-    let content: string;
-    if (format === 'md') {
-      content = `# ${modeLabel}\n\n${result}`;
-      if (reasoning) {
-        content += `\n\n<details>\n<summary>Reasoning</summary>\n\n${reasoning}\n</details>`;
-      }
-    } else {
-      content = result;
-    }
-
-    const blob = new Blob([content], { type: format === 'md' ? 'text/markdown' : 'text/plain' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = `${slug}.${format}`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // ── Mode tab navigation ───────────────────────────────────────────────────
 
   const handleModeClick = (newMode: string) => {
     if (isRunning) return;
-    const cached = modeCache[newMode];
+    setMode(newMode);
+    const cached = modeCache[newMode]
+      ?? (newMode === 'recipe' ? modeCache.recipe_jsonld : undefined);
     if (cached) {
-      // Navigate to cached result for this mode
-      setMode(newMode);
-      setResult(cached.result);
-      setReasoning(cached.reasoning);
+      const cachedMode = modeCache[newMode] ? newMode : 'recipe_jsonld';
+      resultBuf.set(cached.result);
+      reasoningBuf.set(cached.reasoning);
+      setResultMode(cachedMode);
+      setOutputType(cached.outputType);
+      setWarnings([]);
       setView('done');
-    } else {
-      setMode(newMode);
-      // If currently showing a result, go idle so user knows they need to run it
-      if (view === 'done' || view === 'streaming') {
-        setView('idle');
-        setResult('');
-        setReasoning('');
-      }
+    } else if (view === 'done' || view === 'streaming') {
+      setView('idle');
+      resultBuf.set('');
+      reasoningBuf.set('');
     }
   };
 
   const handleSourceTabClick = (tab: SourceTab) => {
-    if (isRunning) return;
+    if (isRunning || tab === sourceTab) return;
     setSourceTab(tab);
-    // Different source = different content, clear cached results and chat
-    if (tab !== sourceTab) {
-      setModeCache({});
-      setView('idle');
-      setResult('');
-      setReasoning('');
-      setSourceContent('');
-      setChatMessages([]);
-      setChatNotices([]);
+    // Different source = different content: drop cached results and chat.
+    setModeCache({});
+    setView('idle');
+    clearRun();
+    setSourceContent('');
+    setSourceUrl(undefined);
+  };
+
+  // ── Result actions ─────────────────────────────────────────────────────
+
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'result';
+
+  const download = (format: DownloadFormat) => {
+    const label = modeLabel(resultMode || mode);
+    if (format === 'svg') {
+      const svg = document.querySelector('.summarize-result .mindmap-svg');
+      if (svg) downloadBlob(svg.outerHTML, `${slug(label)}.svg`, 'image/svg+xml');
+      return;
+    }
+    if (format === 'json') {
+      const data = parseJson<{ name?: string; title?: string }>(result);
+      const name = data?.name ?? data?.title ?? label;
+      downloadBlob(data ? JSON.stringify(data, null, 2) : result, `${slug(String(name))}.json`,
+        resultMode === 'recipe_jsonld' ? 'application/ld+json' : 'application/json');
+      return;
+    }
+    let body = result;
+    if (format === 'md') {
+      body = `# ${label}\n\n${result}`;
+      if (reasoning) body += `\n\n<details>\n<summary>Reasoning</summary>\n\n${reasoning}\n</details>`;
+    }
+    downloadBlob(body, `${slug(label)}.${format}`, format === 'md' ? 'text/markdown' : 'text/plain');
+  };
+
+  const copyResult = async () => {
+    if (await copyText(result)) {
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
     }
   };
 
-  // ── Chat submit ───────────────────────────────────────────────────────────
-
-  const handleChatSubmit = async () => {
-    const trimmed = chatInput.trim();
-    if (!trimmed || isChatStreaming || !sourceContent) return;
-
-    const userMsg: ChatMessage = { role: 'user', content: trimmed };
-    const historyToSend = [...chatMessages, userMsg];
-
-    setChatMessages([...historyToSend, { role: 'assistant', content: '' }]);
-    setChatInput('');
-    setIsChatStreaming(true);
-    chatAccumRef.current = '';
-
-    await api.chat(
-      sourceContent,
-      historyToSend,
-      (chunk) => {
-        chatAccumRef.current += chunk;
-        setChatMessages(prev => {
-          const updated = [...prev];
-          updated[updated.length - 1] = { role: 'assistant', content: chatAccumRef.current };
-          return updated;
-        });
-      },
-      (notice) => setChatNotices(prev => [...prev, notice]),
-      (err) => {
-        setChatMessages(prev => {
-          const updated = [...prev];
-          updated[updated.length - 1] = { role: 'assistant', content: `Error: ${err}` };
-          return updated;
-        });
-        setIsChatStreaming(false);
-      },
-      () => setIsChatStreaming(false),
-    );
+  const generateJsonLD = async () => {
+    if (!result || resultMode !== 'recipe') return;
+    setJsonLdLoading(true);
+    setJsonLdError('');
+    try {
+      const data = await api.convertRecipeToJsonLD(result);
+      setModeCache(prev => ({
+        ...prev,
+        recipe_jsonld: { result: JSON.stringify(data, null, 2), reasoning: '', outputType: 'json:recipe' },
+      }));
+    } catch (err) {
+      setJsonLdError(err instanceof Error ? err.message : 'Failed to generate JSON-LD');
+    } finally {
+      setJsonLdLoading(false);
+    }
   };
 
-  // ── Phase label shown in the thinking indicator ───────────────────────────
+  const copyJsonLD = async () => {
+    const json = modeCache.recipe_jsonld?.result;
+    if (json && await copyText(json)) {
+      setJsonLdCopied(true);
+      setTimeout(() => setJsonLdCopied(false), 2000);
+    }
+  };
 
-  const phaseLabel = (() => {
-    if (view === 'thinking') return 'Thinking…';
-    if (statusDetail)        return statusDetail;
-    if (view === 'extracting')   return 'Extracting…';
-    if (view === 'transcribing') return 'Transcribing…';
-    return '';
-  })();
+  const handleReadAloud = async (text: string) => {
+    if (ttsBlobUrlRef.current) { URL.revokeObjectURL(ttsBlobUrlRef.current); ttsBlobUrlRef.current = null; }
+    setTtsAudioUrl(null);
+    setTtsLoading(true);
+    setTtsError('');
+    try {
+      const blob = await api.synthesizeSpeech(text, ttsVoice);
+      const url = URL.createObjectURL(blob);
+      ttsBlobUrlRef.current = url;
+      setTtsAudioUrl(url);
+    } catch (err) {
+      setTtsError(err instanceof Error ? err.message : 'TTS generation failed — check voice model is downloaded');
+    } finally {
+      setTtsLoading(false);
+    }
+  };
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  const phaseLabel = statusDetail
+    || (view === 'thinking' ? (reasoning ? 'Reasoning…' : 'Thinking…') : '')
+    || (view === 'extracting' ? 'Extracting…' : view === 'transcribing' ? 'Transcribing…' : '');
+
+  const showIndicator = view === 'extracting' || view === 'transcribing' || view === 'thinking'
+    || (view === 'streaming' && !behavior.streamText);
+  const showOutput = (view === 'done' || (view === 'streaming' && behavior.streamText)) && result;
+  const sourceDisabled = isRunning;
+
+  // ── Render ─────────────────────────────────────────────────────────────
 
   return (
     <div className="summarize-page">
       <div className="summarize-inner">
 
-        {/* Back */}
         <Link to="/" className="summarize-back">
           <ArrowLeft size={15} aria-hidden="true" />
           All tools
         </Link>
 
-        {/* Header */}
         <div className="summarize-header">
           <div className="summarize-header-icon">
             <Sparkles size={20} aria-hidden="true" />
@@ -902,7 +605,7 @@ export default function Summarize() {
         </div>
 
         {/* Source tabs */}
-        <div className="summarize-tabs" role="tablist">
+        <div className="summarize-tabs" role="tablist" aria-label="Source type">
           {SOURCE_TABS.map(tab => (
             <button
               key={tab.id}
@@ -910,7 +613,7 @@ export default function Summarize() {
               aria-selected={sourceTab === tab.id}
               className={`summarize-tab${sourceTab === tab.id ? ' active' : ''}`}
               onClick={() => handleSourceTabClick(tab.id)}
-              disabled={isRunning}
+              disabled={sourceDisabled}
             >
               <tab.icon size={14} aria-hidden="true" />
               {tab.label}
@@ -918,7 +621,7 @@ export default function Summarize() {
           ))}
         </div>
 
-        {/* Source input area */}
+        {/* Source input */}
         {sourceTab === 'text' && (
           <textarea
             className="summarize-textarea"
@@ -926,7 +629,7 @@ export default function Summarize() {
             onChange={e => setContent(e.target.value)}
             placeholder="Paste your text, article, transcript, or notes here…"
             rows={10}
-            disabled={isRunning}
+            disabled={sourceDisabled}
             aria-label="Content to summarize"
           />
         )}
@@ -940,16 +643,11 @@ export default function Summarize() {
               label="Drop audio or video file here, or click to browse"
               hint="MP3, WAV, M4A, FLAC, OGG, MP4, MKV, MOV, …"
               icon={Mic}
-              disabled={isRunning}
+              disabled={sourceDisabled}
               maxSizeMb={maxUploadSizeMb}
               onSizeError={(msg) => { setView('error'); setErrorMsg(msg); }}
             />
-            <EnhancementPanel
-              value={enhancement}
-              onChange={setEnhancement}
-              models={audioModels}
-              disabled={isRunning}
-            />
+            <EnhancementPanel value={enhancement} onChange={setEnhancement} models={audioModels} disabled={sourceDisabled} />
           </>
         )}
 
@@ -961,26 +659,24 @@ export default function Summarize() {
             label="Drop a PDF here, or click to browse"
             hint="PDF files only"
             icon={FileIcon}
-            disabled={isRunning}
+            disabled={sourceDisabled}
             maxSizeMb={maxUploadSizeMb}
             onSizeError={(msg) => { setView('error'); setErrorMsg(msg); }}
           />
         )}
 
         {sourceTab === 'image' && (
-          <>
-            <DropZone
-              accept=".jpg,.jpeg,.png,.webp,.gif"
-              file={imageFile}
-              onFile={setImageFile}
-              label="Drop an image here, or click to browse"
-              hint="JPG, PNG, WebP, GIF — requires a vision-capable model"
-              icon={ImageIcon}
-              disabled={isRunning}
-              maxSizeMb={maxUploadSizeMb}
-              onSizeError={(msg) => { setView('error'); setErrorMsg(msg); }}
-            />
-          </>
+          <DropZone
+            accept=".jpg,.jpeg,.png,.webp,.gif"
+            file={imageFile}
+            onFile={setImageFile}
+            label="Drop an image here, or click to browse"
+            hint="JPG, PNG, WebP, GIF — requires a vision-capable model"
+            icon={ImageIcon}
+            disabled={sourceDisabled}
+            maxSizeMb={maxUploadSizeMb}
+            onSizeError={(msg) => { setView('error'); setErrorMsg(msg); }}
+          />
         )}
 
         {sourceTab === 'youtube' && (
@@ -992,7 +688,7 @@ export default function Summarize() {
               onChange={e => setYoutubeUrl(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()}
               placeholder="https://www.youtube.com/watch?v=…"
-              disabled={isRunning}
+              disabled={sourceDisabled}
               aria-label="YouTube URL"
             />
             <label className="summarize-caption-toggle">
@@ -1000,7 +696,7 @@ export default function Summarize() {
                 type="checkbox"
                 checked={preferCaptions}
                 onChange={e => setPreferCaptions(e.target.checked)}
-                disabled={isRunning}
+                disabled={sourceDisabled}
               />
               Use captions when available (faster)
             </label>
@@ -1015,26 +711,24 @@ export default function Summarize() {
             onChange={e => setUrlInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSubmit()}
             placeholder="https://…"
-            disabled={isRunning}
+            disabled={sourceDisabled}
             aria-label="Webpage URL"
           />
         )}
 
         {/* Mode + submit */}
         <div className="summarize-controls">
-          <div className="summarize-modes" role="group" aria-label="Summarization mode">
+          <div className="summarize-modes" role="group" aria-label="Mode">
             {modes.map(m => {
-              const hasCached = Boolean(modeCache[m.id]);
+              const hasCached = Boolean(modeCache[m.id] || (m.id === 'recipe' && modeCache.recipe_jsonld));
               return (
                 <button
                   key={m.id}
-                  className={[
-                    'summarize-mode-btn',
-                    mode === m.id   ? 'active'      : '',
-                    hasCached       ? 'has-result'  : '',
-                  ].filter(Boolean).join(' ')}
+                  className={['summarize-mode-btn', mode === m.id ? 'active' : '', hasCached ? 'has-result' : '']
+                    .filter(Boolean).join(' ')}
                   onClick={() => handleModeClick(m.id)}
                   disabled={isRunning}
+                  aria-pressed={mode === m.id}
                   title={hasCached ? `${m.label} — click to view result` : m.hint}
                 >
                   {m.label}
@@ -1044,7 +738,6 @@ export default function Summarize() {
             })}
           </div>
 
-          {/* Recipe format toggle — shown when recipe mode is selected */}
           {mode === 'recipe' && (
             <div className="summarize-recipe-format">
               <span className="summarize-recipe-format-label">Output format:</span>
@@ -1052,6 +745,7 @@ export default function Summarize() {
                 className={`summarize-recipe-format-btn${recipeFormat === 'jsonld' ? ' active' : ''}`}
                 onClick={() => setRecipeFormat('jsonld')}
                 disabled={isRunning}
+                aria-pressed={recipeFormat === 'jsonld'}
               >
                 <FileJson size={13} aria-hidden="true" />
                 JSON-LD
@@ -1060,27 +754,29 @@ export default function Summarize() {
                 className={`summarize-recipe-format-btn${recipeFormat === 'markdown' ? ' active' : ''}`}
                 onClick={() => setRecipeFormat('markdown')}
                 disabled={isRunning}
+                aria-pressed={recipeFormat === 'markdown'}
               >
                 Markdown
               </button>
             </div>
           )}
 
-          <button
-            className="summarize-submit-btn"
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-          >
-            <Sparkles size={15} aria-hidden="true" />
-            {isRunning ? 'Processing…' : modeCache[mode] ? 'Re-run' : mode === 'transcript' ? 'Transcribe' : 'Summarize'}
-          </button>
+          {isRunning ? (
+            <button className="summarize-submit-btn summarize-submit-btn--stop" onClick={stop}>
+              <Square size={13} aria-hidden="true" />
+              Stop
+            </button>
+          ) : (
+            <button className="summarize-submit-btn" onClick={handleSubmit} disabled={!canSubmit}>
+              <Sparkles size={15} aria-hidden="true" />
+              {modeCache[mode] ? 'Re-run' : mode === 'transcript' ? 'Transcribe' : 'Run'}
+            </button>
+          )}
         </div>
 
-        {/* Persistent TTS audio player — survives mode/tab switches */}
         {ttsEnabled && ttsAudioUrl && (
           <div className="summarize-tts-bar">
             <Volume2 size={14} className="summarize-tts-bar-icon" aria-hidden="true" />
-            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
             <audio className="summarize-tts-audio" src={ttsAudioUrl} controls autoPlay />
             <button
               className="summarize-tts-bar-close"
@@ -1098,89 +794,47 @@ export default function Summarize() {
         {/* Results */}
         {view !== 'idle' && (
           <div className="summarize-result">
-
-            {/* Result header */}
             <div className="summarize-result-header">
-              <h2 className="summarize-result-title">
-                {modes.find(m => m.id === mode)?.label ?? 'Result'}
-              </h2>
-              {view === 'done' && (
+              <h2 className="summarize-result-title">{modeLabel(resultMode || mode) || 'Result'}</h2>
+              {view === 'done' && result && (
                 <div className="summarize-result-actions">
-                  {/* Markdown toggle — not for mind_map or JSON-LD output */}
-                  {mode !== 'mind_map' && submittedModeRef.current !== 'recipe_jsonld' && (
+                  {behavior.rawToggle && (
                     <button
-                      className={`summarize-action-btn${renderMarkdown ? ' active' : ''}`}
-                      onClick={() => setRenderMarkdown(r => !r)}
-                      title={renderMarkdown ? 'Show raw text' : 'Render as markdown'}
-                      aria-pressed={renderMarkdown}
+                      className={`summarize-action-btn${rendered ? ' active' : ''}`}
+                      onClick={() => setRendered(r => !r)}
+                      title={rendered ? 'Show raw output' : `Show ${behavior.renderedLabel.toLowerCase()}`}
+                      aria-pressed={!rendered}
                     >
                       <Code size={14} aria-hidden="true" />
-                      {renderMarkdown ? 'Raw' : 'Markdown'}
+                      {rendered ? 'Raw' : behavior.renderedLabel}
                     </button>
                   )}
-                  {mode === 'mind_map' && (
-                    <button
-                      className={`summarize-action-btn${renderMarkdown ? ' active' : ''}`}
-                      onClick={() => setRenderMarkdown(r => !r)}
-                      title={renderMarkdown ? 'Show diagram' : 'Show raw markdown'}
-                      aria-pressed={renderMarkdown}
-                    >
-                      <Code size={14} aria-hidden="true" />
-                      {renderMarkdown ? 'Diagram' : 'Raw'}
-                    </button>
-                  )}
-                  <button
-                    className={`summarize-action-btn${isCopied ? ' copied' : ''}`}
-                    onClick={copyResult}
-                  >
+                  <button className={`summarize-action-btn${isCopied ? ' copied' : ''}`} onClick={copyResult}>
                     <Copy size={14} aria-hidden="true" />
                     {isCopied ? 'Copied!' : 'Copy'}
                   </button>
-                  {/* TTS — not for JSON-LD output */}
-                  {ttsEnabled && submittedModeRef.current !== 'recipe_jsonld' && (
+                  {ttsEnabled && behavior.tts && (
                     <button
                       className="summarize-action-btn"
-                      onClick={() => handleReadAloud(result, 'result')}
+                      onClick={() => handleReadAloud(result)}
                       disabled={ttsLoading}
                       title="Read aloud"
                     >
-                      {ttsLoading && ttsLoadSrc === 'result'
+                      {ttsLoading
                         ? <><Loader size={13} className="summarize-tts-spin" aria-hidden="true" /> Generating…</>
-                        : <><Volume2 size={13} aria-hidden="true" /> Read Aloud</>
-                      }
+                        : <><Volume2 size={13} aria-hidden="true" /> Read Aloud</>}
                     </button>
                   )}
-                  {ttsError && (
-                    <span className="summarize-tts-error" role="alert">{ttsError}</span>
-                  )}
-                  {mode === 'mind_map' && !renderMarkdown && (
-                    <button className="summarize-action-btn" onClick={downloadSvg}>
-                      <Download size={14} aria-hidden="true" />
-                      .svg
-                    </button>
-                  )}
-                  {/* Download buttons for non-JSON output */}
-                  {mode !== 'mind_map' && submittedModeRef.current !== 'recipe_jsonld' && (
-                    <>
-                      <button className="summarize-action-btn" onClick={() => downloadResult('txt')}>
+                  {ttsError && <span className="summarize-tts-error" role="alert">{ttsError}</span>}
+                  {behavior.downloads
+                    .filter(f => f !== 'svg' || (outputType === 'mindmap' && rendered))
+                    .map(f => (
+                      <button key={f} className="summarize-action-btn" onClick={() => download(f)}>
                         <Download size={14} aria-hidden="true" />
-                        .txt
+                        .{f}
                       </button>
-                      <button className="summarize-action-btn" onClick={() => downloadResult('md')}>
-                        <Download size={14} aria-hidden="true" />
-                        .md
-                      </button>
-                    </>
-                  )}
-                  {/* JSON-LD download for direct JSON output */}
-                  {submittedModeRef.current === 'recipe_jsonld' && (
-                    <button className="summarize-action-btn" onClick={downloadJsonLD}>
-                      <Download size={14} aria-hidden="true" />
-                      .json
-                    </button>
-                  )}
-                  {/* Export to JSON-LD button — shown when recipe markdown was generated */}
-                  {submittedModeRef.current === 'recipe' && (
+                    ))}
+                  {resultMode === 'recipe' && (
                     modeCache.recipe_jsonld ? (
                       <>
                         <button
@@ -1191,7 +845,10 @@ export default function Summarize() {
                           <FileJson size={14} aria-hidden="true" />
                           {jsonLdCopied ? 'Copied!' : 'Copy JSON-LD'}
                         </button>
-                        <button className="summarize-action-btn" onClick={downloadJsonLD}>
+                        <button
+                          className="summarize-action-btn"
+                          onClick={() => downloadBlob(modeCache.recipe_jsonld!.result, 'recipe.json', 'application/ld+json')}
+                        >
                           <Download size={14} aria-hidden="true" />
                           .json
                         </button>
@@ -1208,9 +865,7 @@ export default function Summarize() {
                       </button>
                     )
                   )}
-                  {jsonLdError && (
-                    <span className="summarize-jsonld-error" role="alert">{jsonLdError}</span>
-                  )}
+                  {jsonLdError && <span className="summarize-jsonld-error" role="alert">{jsonLdError}</span>}
                   <button className="summarize-action-btn summarize-action-btn--ghost" onClick={reset}>
                     <RotateCcw size={14} aria-hidden="true" />
                     New
@@ -1219,17 +874,15 @@ export default function Summarize() {
               )}
             </div>
 
-            {/* Phase indicator: extracting / transcribing / thinking */}
-            {(view === 'extracting' || view === 'transcribing' || view === 'thinking') && (
+            {showIndicator && (
               <div className="summarize-thinking" aria-live="polite">
                 <span className="summarize-thinking-dot" />
                 <span className="summarize-thinking-dot" />
                 <span className="summarize-thinking-dot" />
-                <span className="summarize-thinking-label">{phaseLabel}</span>
+                <span className="summarize-thinking-label">{phaseLabel || 'Working…'}</span>
               </div>
             )}
 
-            {/* Error */}
             {view === 'error' && (
               <div className="summarize-error" role="alert">
                 <AlertTriangle size={16} aria-hidden="true" />
@@ -1238,42 +891,18 @@ export default function Summarize() {
               </div>
             )}
 
-            {/* Warning */}
-            {warningMsg && view !== 'error' && (
-              <div className="summarize-warning" role="alert">
+            {view !== 'error' && warnings.map(w => (
+              <div key={w} className="summarize-warning" role="status">
                 <AlertTriangle size={16} aria-hidden="true" />
-                <span>{warningMsg}</span>
+                <span>{w}</span>
               </div>
-            )}
+            ))}
 
-            {/* Output */}
-            {(view === 'streaming' || view === 'done') && result && (
-              mode === 'mind_map' && view === 'done' && !renderMarkdown ? (
-                <MindMapDiagram markdown={result} />
-              ) : (
-                <div
-                  className={[
-                    'summarize-output',
-                    view === 'streaming' ? 'streaming' : '',
-                    renderMarkdown && view === 'done' ? 'markdown' : '',
-                  ].filter(Boolean).join(' ')}
-                  aria-live={view === 'done' ? 'polite' : 'off'}
-                  aria-busy={view === 'streaming'}
-                  aria-label="Summary result"
-                >
-                  {renderMarkdown && view === 'done'
-                    ? <ReactMarkdown>{result}</ReactMarkdown>
-                    : <>{result}{view === 'streaming' && <span className="summarize-cursor" aria-hidden="true" />}</>
-                  }
-                </div>
-              )
-            )}
-
-            {/* Reasoning panel — shown after result is complete */}
-            {view === 'done' && reasoning && (
+            {/* Live reasoning while the model thinks; collapsible afterwards */}
+            {reasoning && (view === 'thinking' || view === 'streaming' || view === 'done') && (
               <details className="summarize-reasoning">
                 <summary className="summarize-reasoning-summary">
-                  Reasoning
+                  {view === 'done' ? 'Reasoning' : 'Reasoning (live)'}
                   <span className="summarize-reasoning-lines">
                     {reasoning.split('\n').filter(Boolean).length} lines
                   </span>
@@ -1282,158 +911,28 @@ export default function Summarize() {
               </details>
             )}
 
-            {/* Translation panel — available once result is complete */}
-            {view === 'done' && result && (
-              <div className="summarize-translate-panel">
-                <div className="summarize-translate-controls">
-                  <Languages size={14} className="summarize-translate-icon" aria-hidden="true" />
-                  <select
-                    className="summarize-translate-select"
-                    value={translateLang}
-                    onChange={e => { setTranslateLang(e.target.value); setTranslation(''); setTranslateState('idle'); }}
-                    aria-label="Target language"
-                  >
-                    {['Spanish','French','German','Portuguese','Italian','Chinese','Japanese','Korean','Russian','Arabic','Hindi','Dutch','Swedish','Polish','Turkish'].map(lang => (
-                      <option key={lang} value={lang}>{lang}</option>
-                    ))}
-                  </select>
-                  <button
-                    className="summarize-action-btn"
-                    onClick={runTranslation}
-                    disabled={translateState === 'streaming'}
-                  >
-                    {translateState === 'streaming' ? 'Translating…' : translateState === 'done' ? 'Re-translate' : 'Translate'}
-                  </button>
-                </div>
-                {translateState === 'error' && (
-                  <p className="summarize-translate-error">{translateError}</p>
-                )}
-                {(translateState === 'streaming' || translateState === 'done') && translation && (
-                  <div className="summarize-translate-result">
-                    {translation}
-                    {translateState === 'streaming' && <span className="summarize-cursor" aria-hidden="true" />}
-                  </div>
-                )}
-                {ttsEnabled && translateState === 'done' && translation && (
-                  <div className="summarize-translate-tts">
-                    <button
-                      className="summarize-action-btn"
-                      onClick={() => handleReadAloud(translation, 'translation')}
-                      disabled={ttsLoading}
-                      title="Read aloud translation"
-                    >
-                      {ttsLoading && ttsLoadSrc === 'translation'
-                        ? <><Loader size={13} className="summarize-tts-spin" aria-hidden="true" /> Generating…</>
-                        : <><Volume2 size={13} aria-hidden="true" /> Read Aloud</>
-                      }
-                    </button>
-                  </div>
-                )}
-              </div>
+            {showOutput && (
+              <ResultView
+                text={result}
+                outputType={outputType}
+                rendered={rendered}
+                streaming={view === 'streaming'}
+                sourceUrl={sourceUrl}
+              />
             )}
 
-          </div>
-        )}
-
-        {/* Chat section — available once source content is set */}
-        {sourceContent && (
-          <div className="summarize-chat-section">
-            <button
-              className={`summarize-chat-toggle${isChatOpen ? ' active' : ''}`}
-              onClick={() => setIsChatOpen(v => !v)}
-            >
-              <MessageSquare size={14} aria-hidden="true" />
-              {isChatOpen ? 'Hide chat' : 'Chat about this'}
-            </button>
-
-            {isChatOpen && (
-              <div className="summarize-chat-panel">
-                {/* Context notices (compression / truncation) */}
-                {chatNotices.length > 0 && (
-                  <div className="summarize-chat-notices">
-                    {chatNotices.map((n, i) => (
-                      <div key={i} className="summarize-chat-notice">{n}</div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Message list */}
-                <div className="summarize-chat-messages">
-                  {chatMessages.length === 0 && (
-                    <div className="summarize-chat-empty">
-                      Ask a question about the content…
-                    </div>
-                  )}
-                  {chatMessages.map((msg, i) => (
-                    <div
-                      key={i}
-                      className={`summarize-chat-msg summarize-chat-msg--${msg.role}`}
-                    >
-                      <div className="summarize-chat-msg-role">
-                        {msg.role === 'user' ? 'You' : 'AI'}
-                      </div>
-                      <div className="summarize-chat-msg-content">
-                        {msg.content || (
-                          <span className="summarize-thinking-dot-row">
-                            <span className="summarize-thinking-dot" />
-                            <span className="summarize-thinking-dot" />
-                            <span className="summarize-thinking-dot" />
-                          </span>
-                        )}
-                        {i === chatMessages.length - 1 &&
-                         msg.role === 'assistant' &&
-                         isChatStreaming &&
-                         msg.content && (
-                          <span className="summarize-cursor" aria-hidden="true" />
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  <div ref={chatEndRef} />
-                </div>
-
-                {/* Input row */}
-                <div className="summarize-chat-input-row">
-                  <textarea
-                    className="summarize-chat-input"
-                    value={chatInput}
-                    onChange={e => setChatInput(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey && !isChatStreaming) {
-                        e.preventDefault();
-                        handleChatSubmit();
-                      }
-                    }}
-                    placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
-                    rows={2}
-                    disabled={isChatStreaming}
-                    aria-label="Chat input"
-                  />
-                  <button
-                    className="summarize-chat-send"
-                    onClick={handleChatSubmit}
-                    disabled={!chatInput.trim() || isChatStreaming}
-                    aria-label="Send message"
-                  >
-                    <Send size={15} aria-hidden="true" />
-                  </button>
-                </div>
-
-                {/* Clear history */}
-                {chatMessages.length > 0 && (
-                  <button
-                    className="summarize-chat-clear"
-                    onClick={() => { setChatMessages([]); setChatNotices([]); }}
-                    disabled={isChatStreaming}
-                  >
-                    <Trash2 size={12} aria-hidden="true" />
-                    Clear history
-                  </button>
-                )}
-              </div>
+            {view === 'done' && result && behavior.translatable && (
+              <TranslatePanel
+                text={result}
+                ttsEnabled={ttsEnabled}
+                ttsLoading={ttsLoading}
+                onReadAloud={handleReadAloud}
+              />
             )}
           </div>
         )}
+
+        {sourceContent && <ChatPanel sourceContent={sourceContent} />}
 
       </div>
     </div>

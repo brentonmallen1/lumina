@@ -82,12 +82,39 @@ def get_video_info(url: str, cookies: str | None = None) -> dict:
             except Exception as exc:
                 raise ValueError(str(exc)) from exc
 
+    return _info_summary(info)
+
+
+def _info_summary(info: dict) -> dict:
     return {
         "title":            info.get("title", ""),
         "description":      info.get("description", ""),
         "duration_seconds": info.get("duration"),
         "thumbnail":        info.get("thumbnail"),
-        "uploader":         info.get("uploader", ""),
+        "uploader":         info.get("uploader") or info.get("channel") or "",
+        "upload_date":      info.get("upload_date"),
+        "chapters":         [
+            {"start_time": c.get("start_time", 0), "title": c.get("title", "")}
+            for c in (info.get("chapters") or [])
+        ],
+        "webpage_url":      info.get("webpage_url"),
+        "video_id":         info.get("id"),
+        "language":         info.get("language"),
+    }
+
+
+def source_meta_from_info(summary: dict) -> dict:
+    """Map a get_video_info() summary to the runner's source-header keys."""
+    return {
+        "title":       summary.get("title"),
+        "uploader":    summary.get("uploader"),
+        "duration":    summary.get("duration_seconds"),
+        "upload_date": summary.get("upload_date"),
+        "description": summary.get("description"),
+        "chapters":    summary.get("chapters") or [],
+        "url":         summary.get("webpage_url"),
+        "video_id":    summary.get("video_id"),
+        "thumbnail":   summary.get("thumbnail"),
     }
 
 
@@ -204,12 +231,35 @@ def download_audio(
 
 
 class YouTubeExtractor:
-    def __init__(self, engine, prefer_captions: bool = True, cookies: str | None = None) -> None:
+    def __init__(
+        self,
+        engine=None,
+        prefer_captions: bool = True,
+        cookies: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        # engine may be None: it's resolved lazily (shared instance) only when
+        # we fall back to audio transcription.
         self.engine = engine
         self.prefer_captions = prefer_captions
         self.cookies = cookies
+        self.language = language
 
     # ── Public ────────────────────────────────────────────────────────────────
+
+    async def extract_with_meta(self, url: str, on_status: StatusCallback) -> tuple[str, dict]:
+        """Extract the transcript plus video metadata (title, description, chapters…)."""
+        await on_status("extracting", "Fetching video info…")
+        meta: dict = {}
+        try:
+            summary = await asyncio.to_thread(get_video_info, url, self.cookies)
+            meta = source_meta_from_info(summary)
+            if meta.get("title"):
+                await on_status("extracting", f"Found: {meta['title'][:80]}")
+        except Exception:
+            await on_status("extracting", "Could not fetch video info — continuing…")
+        text = await self.extract(url, on_status)
+        return text, meta
 
     async def extract(self, url: str, on_status: StatusCallback) -> str:
         if self.prefer_captions:
@@ -323,5 +373,8 @@ class YouTubeExtractor:
         return tmpdir / f"{video_id}.mp3", tmpdir
 
     def _transcribe(self, audio_path: Path) -> str:
+        if self.engine is None:
+            from transcriber import get_engine
+            self.engine = get_engine()
         result = self.engine.transcribe(str(audio_path))
         return result.get("text", "") if isinstance(result, dict) else result

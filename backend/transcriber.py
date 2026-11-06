@@ -1,8 +1,15 @@
 import os
+import threading
+
+# One shared engine instance for the whole process. Loading Whisper/Canary
+# models is slow and memory-hungry, so the API server and the job worker must
+# share a single instance instead of loading one per job.
+_shared_engine = None
+_shared_lock = threading.Lock()
 
 
 def load_engine():
-    """Instantiate and return the configured transcription engine."""
+    """Instantiate and return the configured transcription engine (always a new instance)."""
     name = os.getenv("TRANSCRIPTION_ENGINE", "faster-whisper").lower()
 
     if name == "whisper":
@@ -22,3 +29,21 @@ def load_engine():
             f"Unknown TRANSCRIPTION_ENGINE '{name}'. "
             "Valid options: whisper, faster-whisper, canary, qwen-audio"
         )
+
+
+def set_shared_engine(engine) -> None:
+    """Register the process-wide engine (called by the server after (re)loading)."""
+    global _shared_engine
+    with _shared_lock:
+        _shared_engine = engine
+
+
+def get_engine():
+    """Return the shared engine, loading it once if nobody has yet."""
+    global _shared_engine
+    if _shared_engine is not None:
+        return _shared_engine
+    with _shared_lock:
+        if _shared_engine is None:
+            _shared_engine = load_engine()
+        return _shared_engine

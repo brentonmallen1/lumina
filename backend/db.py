@@ -44,8 +44,12 @@ _DEFAULTS: dict[str, str] = {
     "ollama_model":            os.getenv("OLLAMA_MODEL", ""),
     "ollama_timeout":          os.getenv("OLLAMA_TIMEOUT", "120"),
     "ollama_thinking_enabled": os.getenv("OLLAMA_THINKING_ENABLED", "true"),
-    "ollama_token_budget":     os.getenv("OLLAMA_TOKEN_BUDGET", "280"),
-    "ollama_context_size":     os.getenv("OLLAMA_CONTEXT_SIZE", "32768"),
+    # Tokens reserved for the reply (reasoning + answer); also the num_predict ceiling.
+    "ollama_output_budget":    os.getenv("OLLAMA_OUTPUT_BUDGET", "32768"),
+    # Context window: defaults to each model's own maximum (from Ollama). Users can
+    # override per model (JSON {model: tokens}) and/or set a global cap (blank = none).
+    "ollama_context_overrides": os.getenv("OLLAMA_CONTEXT_OVERRIDES", "{}"),
+    "ollama_context_cap":      os.getenv("OLLAMA_CONTEXT_CAP", ""),
     "ollama_vision_override":  os.getenv("OLLAMA_VISION_OVERRIDE", "false"),
     # Audio enhancement defaults (per-job UI pre-populates from these)
     "enhance_normalize": os.getenv("ENHANCE_NORMALIZE", "false"),
@@ -112,6 +116,12 @@ def init_db() -> None:
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
                 (key, value),
             )
+        # Retired settings: the fixed 32K context (now per-model, defaulting to
+        # the model's maximum) and the gemma visual token budget (not an Ollama
+        # option — it was silently ignored).
+        conn.execute(
+            "DELETE FROM settings WHERE key IN ('ollama_context_size', 'ollama_token_budget')"
+        )
         # RSS/Podcast feed monitoring tables
         conn.execute("""
             CREATE TABLE IF NOT EXISTS feeds (
@@ -274,13 +284,31 @@ def _validate_setting(key: str, value: str) -> str | None:
                 return "ollama_timeout must be between 10 and 3600 seconds"
         except ValueError:
             return "ollama_timeout must be a number"
-    elif key == "ollama_token_budget":
+    elif key == "ollama_output_budget":
         try:
             v = int(value)
-            if v < 0:
-                return "ollama_token_budget cannot be negative"
+            if v < 1024 or v > 262144:
+                return "ollama_output_budget must be between 1024 and 262144 tokens"
         except ValueError:
-            return "ollama_token_budget must be a number"
+            return "ollama_output_budget must be a number"
+    elif key == "ollama_context_cap":
+        if value.strip():
+            try:
+                v = int(value)
+                if v < 2048:
+                    return "ollama_context_cap must be at least 2048 tokens (or blank for no cap)"
+            except ValueError:
+                return "ollama_context_cap must be a number or blank"
+    elif key == "ollama_context_overrides":
+        try:
+            data = json.loads(value or "{}")
+            if not isinstance(data, dict):
+                raise ValueError
+            for model, tokens in data.items():
+                if int(tokens) < 2048:
+                    return f"Context for {model} must be at least 2048 tokens"
+        except (TypeError, ValueError):
+            return "ollama_context_overrides must be a JSON object of {model: tokens}"
     elif key == "ollama_url":
         if value and not (value.startswith("http://") or value.startswith("https://")):
             return "ollama_url must start with http:// or https://"
@@ -785,10 +813,12 @@ def update_job_status(
     if started_at:
         updates.append("started_at = datetime('now')")
 
+    # A running-status update must never resurrect a job the user cancelled.
+    guard = " AND status != 'cancelled'" if status == "running" else ""
     with _lock:
         conn = _connect()
         conn.execute(
-            f"UPDATE jobs SET {', '.join(updates)} WHERE id = ?",
+            f"UPDATE jobs SET {', '.join(updates)} WHERE id = ?{guard}",
             params + [job_id],
         )
         conn.commit()
@@ -811,8 +841,56 @@ def complete_job(
             """UPDATE jobs
                SET status = 'done', result = ?, result_meta = ?,
                    output_file = ?, completed_at = datetime('now')
-               WHERE id = ?""",
+               WHERE id = ? AND status != 'cancelled'""",
             (result, result_meta_json, output_file, job_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        conn.close()
+    return _row_to_job(row) if row else None
+
+
+def update_job_progress(job_id: str, status_detail: str | None = None, partial_result: str | None = None) -> str | None:
+    """Write in-flight progress for a running job. Returns the job's current
+    status (so long-running handlers can stop when it becomes 'cancelled')."""
+    sets, params = [], []
+    if status_detail is not None:
+        sets.append("status_detail = ?")
+        params.append(status_detail)
+    if partial_result is not None:
+        sets.append("result = ?")
+        params.append(partial_result)
+    with _lock:
+        conn = _connect()
+        if sets:
+            conn.execute(
+                f"UPDATE jobs SET {', '.join(sets)} WHERE id = ? AND status = 'running'",
+                params + [job_id],
+            )
+            conn.commit()
+        row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        conn.close()
+    return row["status"] if row else None
+
+
+def update_job_title(job_id: str, title: str) -> None:
+    with _lock:
+        conn = _connect()
+        conn.execute("UPDATE jobs SET source_title = ? WHERE id = ?", (title, job_id))
+        conn.commit()
+        conn.close()
+
+
+def reset_job_for_retry(job_id: str) -> dict | None:
+    """Clear a failed/cancelled job's outcome and set it back to pending."""
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            """UPDATE jobs
+               SET status = 'pending', status_detail = 'Retrying...', error = NULL,
+                   result = NULL, result_meta = '{}', started_at = NULL, completed_at = NULL
+               WHERE id = ?""",
+            (job_id,),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -827,7 +905,7 @@ def fail_job(job_id: str, error: str) -> dict | None:
         conn.execute(
             """UPDATE jobs
                SET status = 'error', error = ?, completed_at = datetime('now')
-               WHERE id = ?""",
+               WHERE id = ? AND status != 'cancelled'""",
             (error, job_id),
         )
         conn.commit()
