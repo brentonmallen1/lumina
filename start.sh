@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start.sh — Launch Whisper GUI.
+# start.sh — Launch Lumina.
 # Reads ENABLE_GPU from .env and automatically includes the GPU compose override.
 # Any extra arguments are forwarded to `docker compose up` (e.g. -d, --build).
 set -euo pipefail

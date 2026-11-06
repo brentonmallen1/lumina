@@ -1,4 +1,4 @@
-# Whisper GUI — task runner
+# Lumina — task runner
 # Install just: https://github.com/casey/just
 #
 # Usage:

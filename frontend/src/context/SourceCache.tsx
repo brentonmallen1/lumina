@@ -13,7 +13,7 @@ interface SourceCacheContextValue {
 
 const SourceCacheContext = createContext<SourceCacheContextValue | null>(null);
 
-const STORAGE_KEY = 'whisper-source-cache';
+const STORAGE_KEY = 'lumina-source-cache';
 
 function loadFromStorage(): Record<string, CachedSource> {
   try {

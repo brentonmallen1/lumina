@@ -121,7 +121,7 @@ It's built for people who already run a home server and want one tool that handl
 ### Quick start
 
 ```bash
-git clone https://github.com/brentonmallen1/whisper-gui.git lumina
+git clone https://github.com/brentonmallen1/lumina.git
 cd lumina
 cp .env.example .env          # set OLLAMA_URL and OLLAMA_MODEL
 just build-playwright-base    # one-time: Chromium + ffmpeg base image

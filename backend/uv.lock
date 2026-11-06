@@ -2440,6 +2440,82 @@ wheels = [
 ]
 
 [[package]]
+name = "lumina"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "accelerate" },
+    { name = "apscheduler" },
+    { name = "clearvoice" },
+    { name = "demucs" },
+    { name = "fastapi" },
+    { name = "faster-whisper" },
+    { name = "feedparser" },
+    { name = "httpx" },
+    { name = "huggingface-hub" },
+    { name = "kokoro" },
+    { name = "librosa" },
+    { name = "openai-whisper" },
+    { name = "pdfplumber" },
+    { name = "playwright" },
+    { name = "pymupdf" },
+    { name = "python-multipart" },
+    { name = "readability-lxml" },
+    { name = "soundfile" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
+    { name = "torch", version = "2.11.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "sys_platform == 'linux'" },
+    { name = "torchaudio", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
+    { name = "torchaudio", version = "2.11.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "sys_platform == 'linux'" },
+    { name = "transformers" },
+    { name = "uvicorn", extra = ["standard"] },
+    { name = "yt-dlp", extra = ["default"] },
+]
+
+[package.optional-dependencies]
+canary = [
+    { name = "nemo-toolkit", extra = ["asr"] },
+]
+diarization = [
+    { name = "pyannote-audio" },
+]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "accelerate", specifier = ">=0.30.0" },
+    { name = "apscheduler", specifier = ">=3.10" },
+    { name = "clearvoice", git = "https://github.com/modelscope/ClearerVoice-Studio.git?subdirectory=clearvoice" },
+    { name = "demucs", specifier = ">=4.0.0" },
+    { name = "fastapi", specifier = ">=0.111.0" },
+    { name = "faster-whisper", specifier = ">=1.0.3" },
+    { name = "feedparser", specifier = ">=6.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "huggingface-hub", specifier = ">=0.24.0" },
+    { name = "kokoro", specifier = ">=0.9" },
+    { name = "librosa", specifier = ">=0.10.1" },
+    { name = "nemo-toolkit", extras = ["asr"], marker = "extra == 'canary'", git = "https://github.com/NVIDIA/NeMo.git" },
+    { name = "openai-whisper", specifier = ">=20231117" },
+    { name = "pdfplumber", specifier = ">=0.10.0" },
+    { name = "playwright", specifier = ">=1.44.0" },
+    { name = "pyannote-audio", marker = "extra == 'diarization'", specifier = ">=3.0" },
+    { name = "pymupdf", specifier = ">=1.24.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "readability-lxml", specifier = ">=0.8.1" },
+    { name = "soundfile", specifier = ">=0.12.1" },
+    { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.6.0" },
+    { name = "torch", marker = "sys_platform == 'linux'", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu126" },
+    { name = "torchaudio", marker = "sys_platform != 'linux'", specifier = ">=2.6.0" },
+    { name = "torchaudio", marker = "sys_platform == 'linux'", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu126" },
+    { name = "transformers", specifier = ">=4.45.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.29.0" },
+    { name = "yt-dlp", extras = ["default"], specifier = ">=2026.3.17" },
+]
+provides-extras = ["canary", "diarization", "test"]
+
+[[package]]
 name = "lxml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -6483,82 +6559,6 @@ name = "wget"
 version = "3.2"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/47/6a/62e288da7bcda82b935ff0c6cfe542970f04e29c756b0e147251b2fb251f/wget-3.2.zip", hash = "sha256:35e630eca2aa50ce998b9b1a127bb26b30dfee573702782aa982f875e3f16061", size = 10857, upload-time = "2015-10-22T15:26:37.51Z" }
-
-[[package]]
-name = "whisper-gui"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "accelerate" },
-    { name = "apscheduler" },
-    { name = "clearvoice" },
-    { name = "demucs" },
-    { name = "fastapi" },
-    { name = "faster-whisper" },
-    { name = "feedparser" },
-    { name = "httpx" },
-    { name = "huggingface-hub" },
-    { name = "kokoro" },
-    { name = "librosa" },
-    { name = "openai-whisper" },
-    { name = "pdfplumber" },
-    { name = "playwright" },
-    { name = "pymupdf" },
-    { name = "python-multipart" },
-    { name = "readability-lxml" },
-    { name = "soundfile" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
-    { name = "torch", version = "2.11.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "sys_platform == 'linux'" },
-    { name = "torchaudio", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
-    { name = "torchaudio", version = "2.11.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "sys_platform == 'linux'" },
-    { name = "transformers" },
-    { name = "uvicorn", extra = ["standard"] },
-    { name = "yt-dlp", extra = ["default"] },
-]
-
-[package.optional-dependencies]
-canary = [
-    { name = "nemo-toolkit", extra = ["asr"] },
-]
-diarization = [
-    { name = "pyannote-audio" },
-]
-test = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "accelerate", specifier = ">=0.30.0" },
-    { name = "apscheduler", specifier = ">=3.10" },
-    { name = "clearvoice", git = "https://github.com/modelscope/ClearerVoice-Studio.git?subdirectory=clearvoice" },
-    { name = "demucs", specifier = ">=4.0.0" },
-    { name = "fastapi", specifier = ">=0.111.0" },
-    { name = "faster-whisper", specifier = ">=1.0.3" },
-    { name = "feedparser", specifier = ">=6.0" },
-    { name = "httpx", specifier = ">=0.27.0" },
-    { name = "huggingface-hub", specifier = ">=0.24.0" },
-    { name = "kokoro", specifier = ">=0.9" },
-    { name = "librosa", specifier = ">=0.10.1" },
-    { name = "nemo-toolkit", extras = ["asr"], marker = "extra == 'canary'", git = "https://github.com/NVIDIA/NeMo.git" },
-    { name = "openai-whisper", specifier = ">=20231117" },
-    { name = "pdfplumber", specifier = ">=0.10.0" },
-    { name = "playwright", specifier = ">=1.44.0" },
-    { name = "pyannote-audio", marker = "extra == 'diarization'", specifier = ">=3.0" },
-    { name = "pymupdf", specifier = ">=1.24.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
-    { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "readability-lxml", specifier = ">=0.8.1" },
-    { name = "soundfile", specifier = ">=0.12.1" },
-    { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.6.0" },
-    { name = "torch", marker = "sys_platform == 'linux'", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu126" },
-    { name = "torchaudio", marker = "sys_platform != 'linux'", specifier = ">=2.6.0" },
-    { name = "torchaudio", marker = "sys_platform == 'linux'", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu126" },
-    { name = "transformers", specifier = ">=4.45.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.29.0" },
-    { name = "yt-dlp", extras = ["default"], specifier = ">=2026.3.17" },
-]
-provides-extras = ["canary", "diarization", "test"]
 
 [[package]]
 name = "whisper-normalizer"
