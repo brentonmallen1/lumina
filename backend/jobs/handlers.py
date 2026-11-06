@@ -259,7 +259,10 @@ async def handle_summarize(job: dict) -> dict | None:
     final: dict = {}
     last_write = 0.0
 
-    async for ev in run_mode(content, mode, rt, header=header, source_meta=source_meta, images=images):
+    async for ev in run_mode(
+        content, mode, rt, header=header, source_meta=source_meta, images=images,
+        options=config.get("options"),
+    ):
         kind = ev["type"]
         if kind == "text":
             text_parts.append(ev["text"])

@@ -208,6 +208,35 @@ PROMPTS: dict[str, dict[str, str]] = {
             "{content}"
         ),
     },
+    "mtg_precon": {
+        "name": "MTG Precon Upgrade",
+        "system": (
+            "You are a Magic: The Gathering Commander expert. You read precon upgrade guides "
+            "(videos or articles) and extract exactly which cards the author adds to the precon and "
+            "which cards they cut. You know card names precisely and correct transcription errors "
+            "(e.g. 'soul ring' → 'Sol Ring', 'arcane signit' → 'Arcane Signet'). You output JSON only."
+        ),
+        "template": (
+            "Extract the precon upgrade from the content below.\n\n"
+            "Use every signal:\n"
+            "- Chapters often label each change (\"Cut 01\", \"Add 03\", \"Cards to Add\", \"Cards to Cut\") "
+            "and give its timestamp.\n"
+            "- The description may list the cards or the budget.\n"
+            "- In the transcript, cuts sound like \"we're taking out\", \"cutting\", \"this goes\"; adds sound like "
+            "\"we're adding\", \"bringing in\", \"my first pickup\".\n\n"
+            "Rules:\n"
+            "- cards_in: every card added to the deck. cards_out: every card removed from the precon.\n"
+            "- Do NOT include cards that are only mentioned, compared, or listed as honorable mentions / "
+            "'if you have a bigger budget' options — put those in honorable_mentions.\n"
+            "- name: the exact official English card name.\n"
+            "- reason: one short sentence, from the content, on why it's added or cut.\n"
+            "- timestamp: the [m:ss] marker where the card is discussed, as \"m:ss\" (null if unknown).\n"
+            "- replaces (cards_in only): the cut card it directly replaces, if the author pairs them; else null.\n"
+            "- precon_name: the precon's product name (e.g. \"Doom Prevails\"); commander: the commander card name.\n"
+            "- budget: the stated upgrade budget (e.g. \"$50\"), or null.\n\n"
+            "{content}"
+        ),
+    },
     "meeting_minutes": {
         "name": "Meeting Minutes",
         "system": (
@@ -323,6 +352,30 @@ EXTRACT_LIST_SCHEMA = {
     "required": ["found", "items"],
 }
 
+_MTG_CARD = {
+    "type": "object",
+    "properties": {
+        "name":      {"type": "string"},
+        "reason":    {"type": "string"},
+        "timestamp": {"type": ["string", "null"]},
+        "replaces":  {"type": ["string", "null"]},
+    },
+    "required": ["name"],
+}
+
+MTG_PRECON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "precon_name":        {"type": ["string", "null"]},
+        "commander":          {"type": ["string", "null"]},
+        "budget":             {"type": ["string", "null"]},
+        "cards_in":           {"type": "array", "items": _MTG_CARD},
+        "cards_out":          {"type": "array", "items": _MTG_CARD},
+        "honorable_mentions": {"type": "array", "items": _MTG_CARD},
+    },
+    "required": ["cards_in", "cards_out"],
+}
+
 DEFAULT_META: dict = {"temperature": 0.7, "think": None, "format": None, "output_type": "markdown"}
 
 MODE_META: dict[str, dict] = {
@@ -336,6 +389,7 @@ MODE_META: dict[str, dict] = {
     "recipe":          {"temperature": 0.3},
     "recipe_jsonld":   {"temperature": 0.1, "format": RECIPE_JSONLD_SCHEMA, "output_type": "json:recipe"},
     "meeting_minutes": {"temperature": 0.4},
+    "mtg_precon":      {"temperature": 0.2, "format": MTG_PRECON_SCHEMA, "output_type": "json:mtg"},
 }
 
 

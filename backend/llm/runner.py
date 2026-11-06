@@ -302,11 +302,17 @@ class ModeContext:
     source_meta: dict
     runtime: Runtime
     images: list[str] | None = None
+    options: dict | None = None   # mode-specific inputs (e.g. a pasted decklist)
 
 
 # mode → async generator(ctx) yielding events (must end with a "result" event)
 ModePipeline = Callable[[ModeContext], AsyncIterator[dict]]
 MODE_PIPELINES: dict[str, ModePipeline] = {}
+
+
+def _load_pipelines() -> None:
+    """Import modules that register mode pipelines (lazy, avoids import cycles)."""
+    import mtg.pipeline  # noqa: F401  (registers "mtg_precon")
 
 
 def register_pipeline(mode: str):
@@ -385,11 +391,13 @@ async def run_mode(
     header: str = "",
     source_meta: dict | None = None,
     images: list[str] | None = None,
+    options: dict | None = None,
 ) -> AsyncIterator[dict]:
     """Run a summarize/extract mode end to end. See module docstring for events."""
+    _load_pipelines()
     ctx = ModeContext(
         mode=mode, content=content, header=header,
-        source_meta=source_meta or {}, runtime=rt, images=images,
+        source_meta=source_meta or {}, runtime=rt, images=images, options=options,
     )
     pipeline = MODE_PIPELINES.get(mode, default_pipeline)
     async for ev in pipeline(ctx):

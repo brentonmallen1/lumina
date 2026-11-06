@@ -1180,3 +1180,28 @@ details[open] .summarize-reasoning-summary::before {
 .summarize-chat-msg-content .markdown ol,
 .summarize-translate-result .markdown ul,
 .summarize-translate-result .markdown ol { padding-left: 1.2em; }
+
+/* ── Mode-specific options (e.g. MTG decklist) ───────────────────────── */
+.summarize-mode-options {
+  flex-basis: 100%;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+.summarize-mode-options > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-weight: 500;
+  padding: 2px 0;
+}
+.summarize-mode-options > summary:hover { color: var(--text); }
+.summarize-mode-options-hint {
+  margin: 6px 0 8px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.summarize-textarea--compact {
+  min-height: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+}

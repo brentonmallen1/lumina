@@ -87,7 +87,7 @@ async def events_to_sse(events: AsyncIterator[dict]) -> AsyncIterator[str]:
 
 async def _mode_stream(content: str, mode: str, model: str | None, *, header: str = "",
                        source_meta: dict | None = None, images: list[str] | None = None,
-                       extracted: str | None = None) -> AsyncIterator[str]:
+                       extracted: str | None = None, options: dict | None = None) -> AsyncIterator[str]:
     try:
         rt = await resolve_runtime(model_override=model)
     except LLMConfigError as exc:
@@ -106,7 +106,7 @@ async def _mode_stream(content: str, mode: str, model: str | None, *, header: st
     yield sse({"phase": "thinking", "detail": f"Processing with {mode} mode…"})
     try:
         async for line in events_to_sse(run_mode(
-            content, mode, rt, header=header, source_meta=source_meta, images=images,
+            content, mode, rt, header=header, source_meta=source_meta, images=images, options=options,
         )):
             yield line
     except Exception as exc:
@@ -114,7 +114,8 @@ async def _mode_stream(content: str, mode: str, model: str | None, *, header: st
     yield sse("[DONE]")
 
 
-async def _with_extraction(extract_coro_fn, mode: str, model: str | None) -> AsyncIterator[str]:
+async def _with_extraction(extract_coro_fn, mode: str, model: str | None,
+                           options: dict | None = None) -> AsyncIterator[str]:
     """Run an extraction (forwarding its status as SSE phases), then the mode.
 
     ``extract_coro_fn(on_status)`` must return ``(content, source_meta)``.
@@ -146,7 +147,7 @@ async def _with_extraction(extract_coro_fn, mode: str, model: str | None) -> Asy
     header = build_source_header(source_meta)
     async for line in _mode_stream(
         content, mode, model, header=header, source_meta=source_meta,
-        extracted=compose_document(header, content),
+        extracted=compose_document(header, content), options=options,
     ):
         yield line
 
@@ -184,12 +185,13 @@ class SummarizeRequest(BaseModel):
     mode: str = "summary"
     model: str | None = None
     title: str | None = None
+    options: dict | None = None     # mode-specific inputs, e.g. {"decklist": "..."}
 
 
 @router.post("/summarize")
 async def summarize_content(req: SummarizeRequest):
     header = build_source_header({"title": req.title}) if req.title else ""
-    return sse_response(_mode_stream(req.content, req.mode, req.model, header=header))
+    return sse_response(_mode_stream(req.content, req.mode, req.model, header=header, options=req.options))
 
 
 # ── Summarize: uploaded file (audio / video / PDF) ────────────────────────────
@@ -288,6 +290,7 @@ class SummarizeUrlRequest(BaseModel):
     model: str | None = None
     prefer_captions: bool = True
     refresh: bool = False
+    options: dict | None = None
 
 
 @router.post("/summarize/url")
@@ -304,7 +307,7 @@ async def summarize_url(req: SummarizeUrlRequest):
             on_status=on_status,
         )
 
-    return sse_response(_with_extraction(extract, req.mode, req.model))
+    return sse_response(_with_extraction(extract, req.mode, req.model, req.options))
 
 
 # ── Summarize: image (vision LLM) ─────────────────────────────────────────────

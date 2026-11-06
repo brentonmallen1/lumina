@@ -154,6 +154,9 @@ export default function Summarize() {
   const [ttsError, setTtsError]       = useState('');
   const ttsBlobUrlRef = useRef<string | null>(null);
 
+  // MTG precon upgrade: optional pasted decklist (Moxfield/Archidekt export)
+  const [mtgDecklist, setMtgDecklist] = useState('');
+
   // Recipe
   const [recipeFormat, setRecipeFormat]   = useState<'markdown' | 'jsonld'>('jsonld');
   const [jsonLdLoading, setJsonLdLoading] = useState(false);
@@ -365,6 +368,9 @@ export default function Summarize() {
     setOutputType(expectedType);
     const src = sourceTab;
     let finalType = expectedType;
+    const modeOptions = effectiveMode === 'mtg_precon' && mtgDecklist.trim()
+      ? { decklist: mtgDecklist }
+      : undefined;
 
     const handlers: StreamHandlers = {
       onPhase: (phase, detail) => {
@@ -417,14 +423,14 @@ export default function Summarize() {
       if (!cached) return fresh();
       setStatusDetail('Using cached extraction…');
       onExtracted(null, cached.label)(cached.content);
-      await api.summarize(cached.content, effectiveMode, handlers, { signal: controller.signal });
+      await api.summarize(cached.content, effectiveMode, handlers, { options: modeOptions, signal: controller.signal });
     };
 
     switch (sourceTab) {
       case 'text': {
         const trimmed = content.trim();
         onExtracted(null, 'text')(trimmed);
-        await api.summarize(trimmed, effectiveMode, handlers, { signal: controller.signal });
+        await api.summarize(trimmed, effectiveMode, handlers, { options: modeOptions, signal: controller.signal });
         break;
       }
       case 'audio': {
@@ -453,9 +459,11 @@ export default function Summarize() {
             source_type: sourceTab,
             source_ref: url,
             source_title: url,
-            config: sourceTab === 'youtube'
-              ? { mode: effectiveMode, prefer_captions: preferCaptions }
-              : { mode: effectiveMode },
+            config: {
+              mode: effectiveMode,
+              ...(sourceTab === 'youtube' ? { prefer_captions: preferCaptions } : {}),
+              ...(modeOptions ? { options: modeOptions } : {}),
+            },
           });
           setView('extracting');
           setStatusDetail('Queued for processing…');
@@ -761,6 +769,26 @@ export default function Summarize() {
             </div>
           )}
 
+          {mode === 'mtg_precon' && (
+            <details className="summarize-mode-options" open={Boolean(mtgDecklist)}>
+              <summary>Upgraded decklist (optional)</summary>
+              <p className="summarize-mode-options-hint">
+                Linked Archidekt decks are read automatically. For Moxfield or anything else, paste the
+                exported list here for exact results — a <code>Cuts</code> or <code>Sideboard</code> section is
+                treated as the cards removed.
+              </p>
+              <textarea
+                className="summarize-textarea summarize-textarea--compact"
+                value={mtgDecklist}
+                onChange={e => setMtgDecklist(e.target.value)}
+                placeholder={'1 Sol Ring\n1 Arcane Signet\n…\n\nCuts\n1 Mind Stone'}
+                rows={6}
+                disabled={isRunning}
+                aria-label="Upgraded decklist"
+              />
+            </details>
+          )}
+
           {isRunning ? (
             <button className="summarize-submit-btn summarize-submit-btn--stop" onClick={stop}>
               <Square size={13} aria-hidden="true" />
@@ -800,7 +828,7 @@ export default function Summarize() {
                 <div className="summarize-result-actions">
                   {behavior.rawToggle && (
                     <button
-                      className={`summarize-action-btn${rendered ? ' active' : ''}`}
+                      className={`summarize-action-btn${!rendered ? ' active' : ''}`}
                       onClick={() => setRendered(r => !r)}
                       title={rendered ? 'Show raw output' : `Show ${behavior.renderedLabel.toLowerCase()}`}
                       aria-pressed={!rendered}

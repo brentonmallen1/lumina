@@ -630,12 +630,12 @@ export function summarize(
   content: string,
   mode: string,
   handlers: StreamHandlers,
-  opts: { model?: string | null; title?: string; signal?: AbortSignal } = {},
+  opts: { model?: string | null; title?: string; options?: Record<string, unknown>; signal?: AbortSignal } = {},
 ): Promise<void> {
   return streamSSE('/api/summarize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, mode, model: opts.model ?? null, title: opts.title }),
+    body: JSON.stringify({ content, mode, model: opts.model ?? null, title: opts.title, options: opts.options }),
   }, handlers, opts.signal);
 }
 
