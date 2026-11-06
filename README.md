@@ -161,6 +161,12 @@ Run `just` to list every recipe. More reading: [Configuration](docs/configuratio
 
 ## Roadmap
 
+- **External browser for web pages**: point Lumina at a [browserless v2](https://github.com/browserless/browserless) container. Its WebSocket URL and token would be set as environment variables at setup, and Playwright connects over CDP instead of bundling Chromium. A self-contained image with a built-in browser stays available as an optional build, like `:canary` today.
+- **Slimmer image** (currently ~7 GB):
+  - Drop the `nvidia/cuda` runtime base. Torch's pip packages already ship CUDA and cuDNN, so the base duplicates ~2.6 GB.
+  - Copy only Chromium's headless shell from the Playwright base, not full Chromium, Firefox and WebKit (~925 MB unused).
+  - Build the frontend natively instead of under amd64 emulation.
+  - Add a registry build cache so a pruned or new machine doesn't rebuild from scratch.
 - Move the remaining in-memory tasks (audio enhancement, YouTube downloads, pipeline sessions) onto the persistent job queue
 - Split the remaining API routes out of `main.py` into routers
 - React 19 and React Router 7 upgrade
